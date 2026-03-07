@@ -1,0 +1,432 @@
+/* LiveAgent Panel — bottom devtools panel */
+
+#la-root * {
+  box-sizing: border-box;
+}
+
+/* ── Toggle button ─────────────────────────────────────────────────────────── */
+
+#la-toggle {
+  position: fixed;
+  bottom: 16px;
+  right: 20px;
+  z-index: 2147483646;
+  background: #7c3aed;
+  color: #fff;
+  border: none;
+  border-radius: 20px;
+  padding: 7px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
+  transition: background 0.15s;
+}
+
+#la-toggle:hover {
+  background: #6d28d9;
+}
+
+/* ── Panel ──────────────────────────────────────────────────────────────────── */
+
+#la-panel {
+  display: none;
+  flex-direction: column;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 300px;
+  background: #1e1e2e;
+  color: #cdd6f4;
+  border-top: 1px solid #313244;
+  z-index: 2147483645;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 13px;
+  line-height: 1.45;
+  transition: height 0.2s ease;
+}
+
+/* ── Toolbar ────────────────────────────────────────────────────────────────── */
+
+#la-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #181825;
+  border-bottom: 1px solid #313244;
+  padding: 0 10px;
+  height: 36px;
+  flex-shrink: 0;
+}
+
+#la-tabs {
+  display: flex;
+  gap: 2px;
+}
+
+.la-tab {
+  background: none;
+  border: none;
+  color: #7f849c;
+  padding: 5px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+  border-radius: 4px;
+  transition: color 0.1s, background 0.1s;
+}
+
+.la-tab:hover {
+  background: #313244;
+  color: #cdd6f4;
+}
+
+.la-tab.la-active {
+  background: #313244;
+  color: #cba6f7;
+  font-weight: 500;
+}
+
+#la-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+#la-pick-btn {
+  background: #313244;
+  border: none;
+  color: #cdd6f4;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+  transition: background 0.1s;
+}
+
+#la-pick-btn:hover {
+  background: #45475a;
+}
+
+#la-pick-btn.la-pick-active {
+  background: #7c3aed;
+  color: #fff;
+}
+
+#la-resize-btn,
+#la-close-btn {
+  background: none;
+  border: none;
+  color: #6c7086;
+  padding: 4px 7px;
+  cursor: pointer;
+  font-size: 13px;
+  font-family: inherit;
+  border-radius: 4px;
+  transition: background 0.1s, color 0.1s;
+}
+
+#la-resize-btn:hover {
+  background: #313244;
+  color: #cdd6f4;
+}
+
+#la-close-btn:hover {
+  background: #313244;
+  color: #f38ba8;
+}
+
+/* ── Body / Panes ───────────────────────────────────────────────────────────── */
+
+#la-body {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+}
+
+.la-pane {
+  display: none;
+  height: 100%;
+  overflow-y: auto;
+  padding: 8px 10px;
+}
+
+/* ── Cards ──────────────────────────────────────────────────────────────────── */
+
+.la-card {
+  background: #181825;
+  border: 1px solid #313244;
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+
+.la-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.la-expand-btn {
+  background: none;
+  border: none;
+  color: #6c7086;
+  font-size: 10px;
+  padding: 0;
+  width: 14px;
+  cursor: pointer;
+  font-family: inherit;
+  flex-shrink: 0;
+}
+
+.la-view-name {
+  color: #cba6f7;
+  font-weight: 600;
+  font-size: 12px;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Badges ─────────────────────────────────────────────────────────────────── */
+
+.la-badge {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.la-green {
+  background: #a6e3a1;
+  color: #1e1e2e;
+}
+
+.la-gray {
+  background: #45475a;
+  color: #a6adc8;
+}
+
+/* ── Meta / dims ────────────────────────────────────────────────────────────── */
+
+.la-meta {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+
+.la-dim {
+  color: #6c7086;
+  font-size: 11px;
+}
+
+.la-pid {
+  color: #6c7086;
+  font-family: "SF Mono", "Fira Code", monospace;
+  font-size: 11px;
+}
+
+.la-url {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 300px;
+}
+
+/* ── Chips ──────────────────────────────────────────────────────────────────── */
+
+.la-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.la-chip {
+  background: #313244;
+  color: #89b4fa;
+  padding: 1px 7px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-family: "SF Mono", "Fira Code", monospace;
+}
+
+.la-chip-more {
+  color: #6c7086;
+}
+
+/* ── Assigns body ───────────────────────────────────────────────────────────── */
+
+.la-assigns-body {
+  margin-top: 8px;
+}
+
+/* ── Pre / code ─────────────────────────────────────────────────────────────── */
+
+.la-pre {
+  background: #11111b;
+  border: 1px solid #313244;
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-size: 11px;
+  font-family: "SF Mono", "Fira Code", monospace;
+  color: #a6e3a1;
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 6px 0 0;
+}
+
+/* ── Selected / Context tab details ────────────────────────────────────────── */
+
+.la-element-tag {
+  color: #89dceb;
+  font-family: "SF Mono", "Fira Code", monospace;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 5px;
+  word-break: break-all;
+}
+
+.la-text-preview {
+  margin-bottom: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.la-section-label {
+  color: #585b70;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin: 10px 0 4px;
+}
+
+.la-attrs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.la-attr {
+  display: flex;
+  gap: 8px;
+  font-size: 11px;
+  font-family: "SF Mono", "Fira Code", monospace;
+}
+
+.la-attr-k {
+  color: #f38ba8;
+  flex-shrink: 0;
+}
+
+.la-attr-v {
+  color: #a6e3a1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.la-chain {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.la-chain-sep {
+  color: #45475a;
+  font-size: 11px;
+}
+
+/* ── Actions ────────────────────────────────────────────────────────────────── */
+
+.la-actions {
+  margin-top: 12px;
+  display: flex;
+  gap: 6px;
+}
+
+.la-btn {
+  border: none;
+  border-radius: 4px;
+  padding: 5px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+  font-weight: 500;
+  transition: background 0.1s;
+}
+
+.la-btn-primary {
+  background: #7c3aed;
+  color: #fff;
+}
+
+.la-btn-primary:hover {
+  background: #6d28d9;
+}
+
+.la-btn-danger {
+  background: #313244;
+  color: #f38ba8;
+}
+
+.la-btn-danger:hover {
+  background: #45475a;
+}
+
+/* ── Context badge ──────────────────────────────────────────────────────────── */
+
+.la-context-badge {
+  background: #1c2f26;
+  border: 1px solid #2d6a4f;
+  border-radius: 4px;
+  padding: 5px 10px;
+  color: #a6e3a1;
+  font-size: 11px;
+  margin-bottom: 10px;
+}
+
+.la-context-badge code {
+  font-family: "SF Mono", "Fira Code", monospace;
+  background: #313244;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+/* ── Empty state ────────────────────────────────────────────────────────────── */
+
+.la-empty {
+  color: #6c7086;
+  text-align: center;
+  padding: 40px 20px;
+  line-height: 1.9;
+}
+
+.la-empty strong {
+  color: #cdd6f4;
+}
+
+/* ── Picker highlight (applied via attribute) ───────────────────────────────── */
+
+[data-la-highlight] {
+  outline: 2px solid #7c3aed !important;
+  outline-offset: 1px !important;
+}
+
+/* ── Error state ────────────────────────────────────────────────────────────── */
+
+.la-error {
+  color: #f38ba8;
+}
