@@ -16,6 +16,9 @@
     pickerActive: false,
     _pickerTarget: null,
     _pollTimer: null,
+    events: [],
+    lastEventId: 0,
+    _eventsTimer: null,
   };
 
   window.__liveAgent = { state };
@@ -168,43 +171,94 @@
     });
   }
 
+  function fetchEvents() {
+    fetch(BASE + "/api/events?since=" + state.lastEventId)
+      .then((r) => r.json())
+      .then((newEvents) => {
+        if (!newEvents.length) return;
+        // prepend newest events; server returns them newest-first
+        state.events = newEvents.concat(state.events).slice(0, 200);
+        state.lastEventId = newEvents[0].id;
+        if (state.activeTab === "events") renderPane("events");
+      })
+      .catch(() => {});
+  }
+
+  function apiClearEvents() {
+    return fetch(BASE + "/api/events", { method: "DELETE" }).then(() => {
+      state.events = [];
+      state.lastEventId = 0;
+      renderPane("events");
+    });
+  }
+
   // ─── Panel Init ────────────────────────────────────────────────────────────
 
   function init() {
     const root = document.getElementById("la-root");
     if (!root) return;
 
+    const standalone = root.dataset.laStandalone === "true";
+
+    const newTabBtn = standalone
+      ? ""
+      : `<button id="la-newtab-btn" title="Open in new tab">&#8599;</button>`;
+
+    const closeBtn = standalone
+      ? ""
+      : `<button id="la-close-btn" title="Close">&#10005;</button>`;
+
     root.innerHTML = `
-      <button id="la-toggle" title="Open LiveAgent panel">&#9889; LA</button>
-      <div id="la-panel">
+      ${standalone ? "" : `<button id="la-toggle" title="Open LiveAgent panel">&#9889; LA</button>`}
+      <div id="la-panel" class="${standalone ? "la-panel-standalone" : ""}">
         <div id="la-bar">
           <div id="la-tabs">
             <button class="la-tab" data-tab="liveviews">LiveViews</button>
             <button class="la-tab" data-tab="selected">Selected</button>
             <button class="la-tab" data-tab="context">Context</button>
+            <button class="la-tab" data-tab="events">Events</button>
           </div>
           <div id="la-bar-right">
             <button id="la-pick-btn">&#128269; Pick</button>
-            <button id="la-resize-btn" title="Toggle height">&#8645;</button>
-            <button id="la-close-btn" title="Close">&#10005;</button>
+            ${newTabBtn}
+            ${standalone ? "" : `<button id="la-resize-btn" title="Toggle height">&#8645;</button>`}
+            ${closeBtn}
           </div>
         </div>
         <div id="la-body">
           <div id="la-pane-liveviews" class="la-pane"></div>
           <div id="la-pane-selected" class="la-pane"></div>
           <div id="la-pane-context" class="la-pane"></div>
+          <div id="la-pane-events" class="la-pane"></div>
         </div>
       </div>
     `;
 
-    document.getElementById("la-toggle").addEventListener("click", openPanel);
-    document.getElementById("la-close-btn").addEventListener("click", closePanel);
+    if (!standalone) {
+      document.getElementById("la-toggle").addEventListener("click", openPanel);
+      document.getElementById("la-close-btn").addEventListener("click", closePanel);
+      document.getElementById("la-resize-btn").addEventListener("click", toggleHeight);
+    }
+
     document.getElementById("la-pick-btn").addEventListener("click", togglePicker);
-    document.getElementById("la-resize-btn").addEventListener("click", toggleHeight);
+
+    const newTabEl = document.getElementById("la-newtab-btn");
+    if (newTabEl) {
+      newTabEl.addEventListener("click", () =>
+        window.open(BASE + "/panel", "_blank", "noopener")
+      );
+    }
 
     root.querySelectorAll(".la-tab").forEach((btn) => {
       btn.addEventListener("click", () => switchTab(btn.dataset.tab));
     });
+
+    if (standalone) {
+      // In standalone mode, panel is always visible — start immediately
+      state.visible = true;
+      fetchLiveViews();
+      state._pollTimer = setInterval(fetchLiveViews, 3000);
+    }
 
     switchTab("liveviews");
   }
@@ -226,6 +280,8 @@
     document.getElementById("la-panel").style.display = "none";
     document.getElementById("la-toggle").style.display = "";
     clearInterval(state._pollTimer);
+    clearInterval(state._eventsTimer);
+    state._eventsTimer = null;
     if (state.pickerActive) stopPicker();
   }
 
@@ -241,6 +297,12 @@
   }
 
   function switchTab(tab) {
+    // Stop events polling when leaving events tab
+    if (state.activeTab === "events" && tab !== "events") {
+      clearInterval(state._eventsTimer);
+      state._eventsTimer = null;
+    }
+
     state.activeTab = tab;
     document.querySelectorAll(".la-tab").forEach((b) =>
       b.classList.toggle("la-active", b.dataset.tab === tab)
@@ -248,6 +310,13 @@
     document.querySelectorAll(".la-pane").forEach((p) => (p.style.display = "none"));
     const pane = document.getElementById("la-pane-" + tab);
     if (pane) pane.style.display = "block";
+
+    // Start events polling when entering events tab
+    if (tab === "events" && !state._eventsTimer) {
+      fetchEvents();
+      state._eventsTimer = setInterval(fetchEvents, 1500);
+    }
+
     renderPane(tab);
   }
 
@@ -276,6 +345,7 @@
     if (tab === "liveviews") el.innerHTML = renderLiveViews();
     if (tab === "selected") el.innerHTML = renderSelected();
     if (tab === "context") el.innerHTML = renderContext();
+    if (tab === "events") el.innerHTML = renderEvents();
     attachPaneEvents(el, tab);
   }
 
@@ -294,6 +364,21 @@
       const clear = el.querySelector("#la-clear-btn");
       if (clear) clear.addEventListener("click", apiClearPin);
     }
+
+    if (tab === "events") {
+      const clear = el.querySelector("#la-events-clear");
+      if (clear) clear.addEventListener("click", apiClearEvents);
+
+      // Expand/collapse event params on row click
+      el.querySelectorAll(".la-event-row").forEach((row) => {
+        row.addEventListener("click", () => {
+          const params = row.nextElementSibling;
+          if (params && params.classList.contains("la-event-params")) {
+            params.style.display = params.style.display === "none" ? "block" : "none";
+          }
+        });
+      });
+    }
   }
 
   async function toggleAssigns(pid, btn) {
@@ -301,19 +386,32 @@
     const container = document.getElementById(safeId);
     if (!container) return;
 
-    if (container.style.display !== "none" && container.innerHTML !== "") {
+    if (state.expandedPids[pid]) {
+      state.expandedPids[pid] = false;
       container.style.display = "none";
       btn.textContent = "\u25B6";
       return;
     }
 
+    state.expandedPids[pid] = true;
     btn.textContent = "\u25BC";
     container.style.display = "block";
+
+    if (state.assignsCache[pid]) {
+      container.innerHTML =
+        '<pre class="la-pre">' + escHtml(JSON.stringify(state.assignsCache[pid], null, 2)) + "</pre>";
+      return;
+    }
+
     container.innerHTML = '<span class="la-dim">Loading\u2026</span>';
     const assigns = await fetchAssigns(pid);
-    container.innerHTML = assigns
-      ? '<pre class="la-pre">' + escHtml(JSON.stringify(assigns, null, 2)) + "</pre>"
-      : '<span class="la-dim la-error">Failed to load assigns.</span>';
+    if (assigns) {
+      state.assignsCache[pid] = assigns;
+      container.innerHTML =
+        '<pre class="la-pre">' + escHtml(JSON.stringify(assigns, null, 2)) + "</pre>";
+    } else {
+      container.innerHTML = '<span class="la-dim la-error">Failed to load assigns.</span>';
+    }
   }
 
   function renderLiveViews() {
@@ -327,10 +425,16 @@
         const shown = keys.slice(0, 12);
         const extra = keys.length > 12 ? keys.length - 12 : 0;
         const safeId = safePidId(v.pid_string);
+        const expanded = !!state.expandedPids[v.pid_string];
+        const cached = state.assignsCache[v.pid_string];
+
+        const assignsBody = expanded && cached
+          ? '<pre class="la-pre">' + escHtml(JSON.stringify(cached, null, 2)) + "</pre>"
+          : "";
 
         return `<div class="la-card">
           <div class="la-card-header">
-            <button class="la-expand-btn" data-pid="${escHtml(v.pid_string)}">\u25B6</button>
+            <button class="la-expand-btn" data-pid="${escHtml(v.pid_string)}">${expanded ? "\u25BC" : "\u25B6"}</button>
             <span class="la-view-name">${escHtml(shortName(v.view))}</span>
             <span class="la-badge ${v.connected ? "la-green" : "la-gray"}">${v.connected ? "live" : "static"}</span>
           </div>
@@ -342,7 +446,7 @@
             ${shown.map((k) => `<span class="la-chip">${escHtml(k)}</span>`).join("")}
             ${extra ? `<span class="la-chip la-chip-more">+${extra}</span>` : ""}
           </div>
-          <div id="la-assigns-${safeId}" class="la-assigns-body" style="display:none"></div>
+          <div id="la-assigns-${safeId}" class="la-assigns-body" style="${expanded ? "" : "display:none"}">${assignsBody}</div>
         </div>`;
       })
       .join("");
@@ -435,6 +539,89 @@
         <button id="la-clear-btn" class="la-btn la-btn-danger">&#10005; Clear</button>
       </div>
     </div>`;
+  }
+
+  function renderEvents() {
+    const toolbar = `
+      <div class="la-events-toolbar">
+        <span class="la-dim">${state.events.length} event${state.events.length !== 1 ? "s" : ""}</span>
+        <button id="la-events-clear" class="la-btn la-btn-danger" style="padding:2px 8px;font-size:11px">Clear</button>
+      </div>`;
+
+    if (!state.events.length) {
+      return toolbar + '<div class="la-empty">No events yet.<br><span class="la-dim">Interact with the app — clicks, form changes, and navigations will appear here.</span></div>';
+    }
+
+    const rows = state.events.map((ev) => {
+      const isError = ev.action === "exception";
+      const label = eventLabel(ev);
+      const badge = eventBadge(ev, isError);
+      const dur = durationBadge(ev.duration_ms, isError);
+      const name = ev.event ? `<span class="la-event-name">${escHtml(ev.event)}</span>` : "";
+      const uri = ev.uri ? `<span class="la-dim la-url">${escHtml(ev.uri)}</span>` : "";
+      const view = ev.component
+        ? escHtml(shortName(ev.component))
+        : ev.view
+        ? escHtml(shortName(ev.view))
+        : "";
+      const time = timeAgo(ev.timestamp);
+      const hasDetail = ev.params || ev.error || ev.uri;
+
+      const detail = hasDetail
+        ? `<div class="la-event-params" style="display:none">
+            ${ev.error ? `<div class="la-event-error">${escHtml(ev.error)}</div>` : ""}
+            ${ev.params ? `<pre class="la-pre">${escHtml(JSON.stringify(ev.params, null, 2))}</pre>` : ""}
+           </div>`
+        : "";
+
+      return `
+        <div class="la-event-row${isError ? " la-event-row-error" : ""}${hasDetail ? " la-event-row-clickable" : ""}">
+          ${badge}
+          <span class="la-event-label">${label}</span>
+          ${name}
+          ${uri}
+          <span class="la-event-view">${view}</span>
+          <span class="la-event-right">${dur}<span class="la-event-time">${time}</span></span>
+        </div>
+        ${detail}`;
+    }).join("");
+
+    return toolbar + '<div class="la-event-list">' + rows + "</div>";
+  }
+
+  function eventLabel(ev) {
+    const labels = {
+      handle_event: "event",
+      mount: "mount",
+      handle_params: "params",
+      handle_info: "info",
+    };
+    return labels[ev.type] || ev.type;
+  }
+
+  function eventBadge(ev, isError) {
+    if (isError) return '<span class="la-ev-badge la-ev-error">error</span>';
+    const cls = {
+      handle_event: "la-ev-event",
+      mount: "la-ev-mount",
+      handle_params: "la-ev-params",
+      handle_info: "la-ev-info",
+    }[ev.type] || "la-ev-info";
+    return `<span class="la-ev-badge ${cls}">${eventLabel(ev)}</span>`;
+  }
+
+  function durationBadge(ms, isError) {
+    if (ms == null || isError) return '<span class="la-dur la-dur-nil">—</span>';
+    const cls = ms < 10 ? "la-dur-fast" : ms < 100 ? "la-dur-mid" : "la-dur-slow";
+    return `<span class="la-dur ${cls}">${ms}ms</span>`;
+  }
+
+  function timeAgo(iso) {
+    const diff = Math.floor((Date.now() - new Date(iso)) / 1000);
+    if (diff < 5) return "just now";
+    if (diff < 60) return diff + "s ago";
+    if (diff < 3600) return Math.floor(diff / 60) + "m ago";
+    return Math.floor(diff / 3600) + "h ago";
   }
 
   // ─── Helpers ───────────────────────────────────────────────────────────────

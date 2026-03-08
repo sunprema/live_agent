@@ -42,6 +42,17 @@ defmodule LiveAgent.Router do
     |> halt()
   end
 
+  # Standalone panel page
+
+  get "/panel" do
+    html = LiveAgent.Panel.standalone_html()
+
+    conn
+    |> put_resp_header("content-type", "text/html; charset=utf-8")
+    |> send_resp(200, html)
+    |> halt()
+  end
+
   # Static assets
 
   get "/js" do
@@ -107,6 +118,26 @@ defmodule LiveAgent.Router do
 
   post "/api/pin" do
     LiveAgent.BrowserStateStore.pin_context()
+
+    conn
+    |> put_resp_header("content-type", "application/json")
+    |> send_resp(200, "{\"ok\":true}")
+    |> halt()
+  end
+
+  get "/api/events" do
+    conn = fetch_query_params(conn)
+    since_id = conn.query_params |> Map.get("since", "0") |> String.to_integer()
+    events = LiveAgent.EventStore.get_events(since_id)
+
+    conn
+    |> put_resp_header("content-type", "application/json")
+    |> send_resp(200, Jason.encode!(events))
+    |> halt()
+  end
+
+  delete "/api/events" do
+    LiveAgent.EventStore.clear()
 
     conn
     |> put_resp_header("content-type", "application/json")

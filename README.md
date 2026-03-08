@@ -12,15 +12,18 @@ Think of it as `live_debugger` but as an MCP server — giving Claude Code live 
 
 LiveAgent auto-injects a **bottom panel** into every page of your app (dev only). Click the **⚡ LA** button in the bottom-right corner to open it.
 
-The panel has three tabs:
+The panel has four tabs:
 
-| Tab           | What it shows                                                      |
-| ------------- | ------------------------------------------------------------------ |
-| **LiveViews** | All active LiveView processes — click `▶` to expand assigns inline |
-| **Selected**  | The DOM element you picked with the element picker                 |
-| **Context**   | The element you pinned for Claude to read                          |
+| Tab           | What it shows                                                                     |
+| ------------- | --------------------------------------------------------------------------------- |
+| **LiveViews** | All active LiveView processes — click `▶` to expand assigns inline               |
+| **Selected**  | The DOM element you picked with the element picker                                |
+| **Context**   | The element you pinned for Claude to read                                         |
+| **Events**    | Live log of `handle_event`, `mount`, `handle_params`, and `handle_info` calls    |
 
 **Element picker** — click **🔍 Pick**, then click any element on the page. LiveAgent captures its HTML, CSS classes, Phoenix attributes (`phx-click`, `data-phx-component`, etc.), and parent chain. Click **📋 Pin to Claude Context** to make it available to Claude via MCP.
+
+**Events tab** — shows a scrolling log of LiveView telemetry events as they happen. Each row displays the event type, event name (for `handle_event`), the LiveView or LiveComponent that handled it, duration, and how long ago it occurred. Click any row to expand the params or error details. Duration is color-coded: green under 10ms, amber 10–100ms, red over 100ms. Exceptions are highlighted in red. The log holds the last 200 events and can be cleared with the Clear button.
 
 ### MCP tools
 
@@ -112,6 +115,7 @@ Claude Code will connect to LiveAgent over HTTP while your app is running. No se
 - Auto-injects the browser panel into every HTML response (dev only)
 - Exposes a small JSON API at `/live_agent/api/*` for the panel to call
 - Runs a `BrowserStateStore` GenServer to hold the current selected element and pinned context
+- Runs an `EventStore` GenServer that subscribes to Phoenix's built-in telemetry events and keeps a ring buffer of the last 200
 
 For assigns inspection it uses the same technique as [`live_debugger`](https://github.com/software-mansion/live_debugger):
 
@@ -135,6 +139,28 @@ No instrumentation required in your LiveViews — it works with any existing Pho
 5. Ask Claude: _"Add a Status column to this table"_
 
 Claude calls `get_pinned_context`, gets the element's HTML and Phoenix metadata, finds the `.heex` template, and makes the change.
+
+### Via the Events tab
+
+The Events tab is useful when you can't figure out why state isn't updating as expected:
+
+1. Open the panel and switch to **Events**
+2. Interact with the page — click a button, submit a form, navigate
+3. Watch the event log to confirm your `handle_event` is firing, check params, and see duration
+4. If an event shows red, click it to expand the exception details
+5. Ask Claude: _"The save-form event is firing but the user isn't being updated — here's the event log"_
+
+No instrumentation needed — LiveAgent hooks into the telemetry events Phoenix already emits.
+
+The following event types are captured:
+
+| Badge    | Telemetry event                              |
+| -------- | -------------------------------------------- |
+| `event`  | `handle_event` on LiveView and LiveComponent |
+| `mount`  | `mount` on LiveView                          |
+| `params` | `handle_params` on LiveView                  |
+| `info`   | `handle_info` on LiveView                    |
+| `error`  | Any of the above that raises an exception    |
 
 ### Via assigns inspection
 
