@@ -77,6 +77,48 @@ defmodule LiveAgent.Router do
 
   # Browser state API
 
+  get "/api/ash_resources" do
+    if LiveAgent.AshInspector.available?() do
+      resources = LiveAgent.AshInspector.list_resources()
+
+      conn
+      |> put_resp_header("content-type", "application/json")
+      |> send_resp(200, Jason.encode!(resources))
+      |> halt()
+    else
+      conn
+      |> put_resp_header("content-type", "application/json")
+      |> send_resp(200, Jason.encode!(%{error: "ash_not_available"}))
+      |> halt()
+    end
+  end
+
+  get "/api/ash_resource" do
+    conn = fetch_query_params(conn)
+    name = conn.query_params["name"]
+
+    if LiveAgent.AshInspector.available?() do
+      case LiveAgent.AshInspector.resource_info(name) do
+        {:ok, info} ->
+          conn
+          |> put_resp_header("content-type", "application/json")
+          |> send_resp(200, Jason.encode!(info))
+          |> halt()
+
+        {:error, reason} ->
+          conn
+          |> put_resp_header("content-type", "application/json")
+          |> send_resp(404, Jason.encode!(%{error: reason}))
+          |> halt()
+      end
+    else
+      conn
+      |> put_resp_header("content-type", "application/json")
+      |> send_resp(200, Jason.encode!(%{error: "ash_not_available"}))
+      |> halt()
+    end
+  end
+
   get "/api/live_views" do
     views = LiveAgent.SocketInspector.list_live_views()
 

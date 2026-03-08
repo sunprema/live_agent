@@ -19,6 +19,10 @@
     events: [],
     lastEventId: 0,
     _eventsTimer: null,
+    ashResources: [],
+    ashResourcesLoaded: false,
+    expandedResources: {},
+    resourceCache: {},
   };
 
   window.__liveAgent = { state };
@@ -184,6 +188,25 @@
       .catch(() => {});
   }
 
+  function fetchAshResources() {
+    fetch(BASE + "/api/ash_resources")
+      .then((r) => r.json())
+      .then((data) => {
+        if (!data.error) state.ashResources = data;
+      })
+      .catch(() => {})
+      .finally(() => {
+        state.ashResourcesLoaded = true;
+        if (state.activeTab === "resources") renderPane("resources");
+      });
+  }
+
+  function fetchAshResourceInfo(name) {
+    return fetch(BASE + "/api/ash_resource?name=" + encodeURIComponent(name))
+      .then((r) => r.json())
+      .catch(() => null);
+  }
+
   function apiClearEvents() {
     return fetch(BASE + "/api/events", { method: "DELETE" }).then(() => {
       state.events = [];
@@ -217,6 +240,7 @@
             <button class="la-tab" data-tab="selected">Selected</button>
             <button class="la-tab" data-tab="context">Context</button>
             <button class="la-tab" data-tab="events">Events</button>
+            <button class="la-tab" data-tab="resources">Resources</button>
           </div>
           <div id="la-bar-right">
             <button id="la-pick-btn">&#128269; Pick</button>
@@ -230,6 +254,7 @@
           <div id="la-pane-selected" class="la-pane"></div>
           <div id="la-pane-context" class="la-pane"></div>
           <div id="la-pane-events" class="la-pane"></div>
+          <div id="la-pane-resources" class="la-pane"></div>
         </div>
       </div>
     `;
@@ -317,6 +342,11 @@
       state._eventsTimer = setInterval(fetchEvents, 1500);
     }
 
+    // Fetch resources once on first open
+    if (tab === "resources" && !state.ashResourcesLoaded) {
+      fetchAshResources();
+    }
+
     renderPane(tab);
   }
 
@@ -346,6 +376,7 @@
     if (tab === "selected") el.innerHTML = renderSelected();
     if (tab === "context") el.innerHTML = renderContext();
     if (tab === "events") el.innerHTML = renderEvents();
+    if (tab === "resources") el.innerHTML = renderResources();
     attachPaneEvents(el, tab);
   }
 
@@ -363,6 +394,12 @@
     if (tab === "context") {
       const clear = el.querySelector("#la-clear-btn");
       if (clear) clear.addEventListener("click", apiClearPin);
+    }
+
+    if (tab === "resources") {
+      el.querySelectorAll(".la-res-expand-btn").forEach((btn) => {
+        btn.addEventListener("click", () => toggleResource(btn.dataset.resource, btn));
+      });
     }
 
     if (tab === "events") {
@@ -539,6 +576,128 @@
         <button id="la-clear-btn" class="la-btn la-btn-danger">&#10005; Clear</button>
       </div>
     </div>`;
+  }
+
+  async function toggleResource(name, btn) {
+    const safeId = "la-res-detail-" + name.replace(/[^a-zA-Z0-9]/g, "_");
+    const container = document.getElementById(safeId);
+    if (!container) return;
+
+    if (state.expandedResources[name]) {
+      state.expandedResources[name] = false;
+      container.style.display = "none";
+      btn.textContent = "\u25B6";
+      return;
+    }
+
+    state.expandedResources[name] = true;
+    btn.textContent = "\u25BC";
+    container.style.display = "block";
+
+    if (state.resourceCache[name]) {
+      container.innerHTML = renderResourceDetail(state.resourceCache[name]);
+      return;
+    }
+
+    container.innerHTML = '<span class="la-dim">Loading\u2026</span>';
+    const info = await fetchAshResourceInfo(name);
+    if (info && !info.error) {
+      state.resourceCache[name] = info;
+      container.innerHTML = renderResourceDetail(info);
+    } else {
+      container.innerHTML = '<span class="la-dim la-error">Failed to load resource info.</span>';
+    }
+  }
+
+  function renderResources() {
+    if (!state.ashResourcesLoaded) {
+      return '<div class="la-empty">Loading\u2026</div>';
+    }
+
+    if (!state.ashResources.length) {
+      return '<div class="la-empty">No Ash resources found.<br><span class="la-dim">Make sure Ash is installed and your resources are loaded.</span></div>';
+    }
+
+    return state.ashResources.map((r) => {
+      const name = r.resource;
+      const safeId = name.replace(/[^a-zA-Z0-9]/g, "_");
+      const expanded = !!state.expandedResources[name];
+      const cached = state.resourceCache[name];
+      const attrs = (r.attribute_names || []).slice(0, 10);
+      const extra = (r.attribute_names || []).length > 10 ? (r.attribute_names.length - 10) : 0;
+
+      return `<div class="la-card">
+        <div class="la-card-header">
+          <button class="la-res-expand-btn la-expand-btn" data-resource="${escHtml(name)}">${expanded ? "\u25BC" : "\u25B6"}</button>
+          <span class="la-view-name">${escHtml(shortName(name))}</span>
+          ${r.domain ? `<span class="la-dim la-res-domain">${escHtml(shortName(r.domain))}</span>` : ""}
+        </div>
+        <div class="la-chips">
+          ${attrs.map((a) => `<span class="la-chip">${escHtml(a)}</span>`).join("")}
+          ${extra ? `<span class="la-chip la-chip-more">+${extra}</span>` : ""}
+        </div>
+        <div id="la-res-detail-${safeId}" style="${expanded && cached ? "" : "display:none"}">
+          ${expanded && cached ? renderResourceDetail(cached) : ""}
+        </div>
+      </div>`;
+    }).join("");
+  }
+
+  function renderResourceDetail(info) {
+    const attrs = info.attributes || [];
+    const actions = info.actions || [];
+    const rels = info.relationships || [];
+    const calcs = info.calculations || [];
+    const aggs = info.aggregates || [];
+
+    const attrRows = attrs.map((a) => `
+      <tr>
+        <td class="la-res-col-name">${escHtml(a.name)}</td>
+        <td class="la-res-col-type">${escHtml(a.type || "?")}</td>
+        <td>${a.primary_key ? '<span class="la-res-badge la-res-pk">PK</span>' : ""}</td>
+        <td class="la-dim">${a.allow_nil ? "nil ok" : "required"}</td>
+        <td class="la-dim">${a.writable === false ? "read-only" : ""}</td>
+      </tr>`).join("");
+
+    const actionRows = actions.map((a) => {
+      const accept = a.accept && a.accept.length ? `<span class="la-dim">accept: ${escHtml(a.accept.join(", "))}</span>` : "";
+      const args = a.arguments && a.arguments.length
+        ? `<span class="la-dim">args: ${escHtml(a.arguments.map((x) => x.name).join(", "))}</span>`
+        : "";
+      return `<div class="la-res-action-row">
+        <span class="la-res-action-name">${escHtml(a.name)}${a.primary ? '<span class="la-res-primary">*</span>' : ""}</span>
+        <span class="la-res-badge la-res-type-${escHtml(a.type)}">${escHtml(a.type)}</span>
+        ${accept}${args}
+      </div>`;
+    }).join("");
+
+    const relRows = rels.map((r) => `
+      <div class="la-res-rel-row">
+        <span class="la-res-col-name">${escHtml(r.name)}</span>
+        <span class="la-res-badge la-res-rel">${escHtml(r.type)}</span>
+        <span class="la-dim">\u2192 ${escHtml(r.destination)}</span>
+      </div>`).join("");
+
+    const calcRows = calcs.length ? calcs.map((c) =>
+      `<span class="la-chip">${escHtml(c.name)}</span>`).join("") : "";
+
+    const aggRows = aggs.length ? aggs.map((a) =>
+      `<span class="la-chip">${escHtml(a.name)} (${escHtml(a.kind)})</span>`).join("") : "";
+
+    return `
+      <div class="la-res-detail">
+        <div class="la-section-label">Attributes</div>
+        <table class="la-res-table">${attrRows}</table>
+
+        <div class="la-section-label">Actions</div>
+        <div class="la-res-actions">${actionRows || '<span class="la-dim">None</span>'}</div>
+
+        <div class="la-section-label">Relationships</div>
+        <div class="la-res-rels">${relRows || '<span class="la-dim">None</span>'}</div>
+
+        ${calcs.length ? `<div class="la-section-label">Calculations</div><div class="la-chips">${calcRows}</div>` : ""}
+        ${aggs.length ? `<div class="la-section-label">Aggregates</div><div class="la-chips">${aggRows}</div>` : ""}
+      </div>`;
   }
 
   function renderEvents() {

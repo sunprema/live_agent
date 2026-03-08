@@ -2,6 +2,7 @@ defmodule LiveAgent.MCP.Tools do
   @moduledoc false
 
   alias LiveAgent.SocketInspector
+  alias LiveAgent.AshInspector
 
   def tools do
     [
@@ -88,6 +89,38 @@ defmodule LiveAgent.MCP.Tools do
         """,
         inputSchema: %{type: "object", properties: %{}, required: []},
         callback: &get_pinned_context/1
+      },
+      %{
+        name: "list_ash_resources",
+        description: """
+        Lists all Ash resources currently loaded in the running application.
+        For each resource returns: module name, domain, primary key, attribute names,
+        action names (primary actions marked with *), and relationship names with types.
+        Call this first to understand the data model before writing or modifying Ash code.
+        Returns an error if Ash is not available in the app.
+        """,
+        inputSchema: %{type: "object", properties: %{}, required: []},
+        callback: &list_ash_resources/1
+      },
+      %{
+        name: "get_ash_resource_info",
+        description: """
+        Returns full introspection data for a single Ash resource: all attributes with types
+        and constraints, all actions with their arguments and accepted attributes, relationships
+        with source/destination keys, calculations, and aggregates.
+        Use this before adding a field, writing a new action, or modifying a relationship.
+        """,
+        inputSchema: %{
+          type: "object",
+          required: ["resource"],
+          properties: %{
+            resource: %{
+              type: "string",
+              description: "Resource module name, e.g. \"MyApp.Accounts.User\""
+            }
+          }
+        },
+        callback: &get_ash_resource_info/1
       },
       %{
         name: "watch_assigns",
@@ -219,4 +252,46 @@ defmodule LiveAgent.MCP.Tools do
         {:ok, Jason.encode!(context, pretty: true)}
     end
   end
+
+  defp list_ash_resources(_args) do
+    unless AshInspector.available?() do
+      {:error, "Ash is not available in this application."}
+    else
+      resources = AshInspector.list_resources()
+
+      if Enum.empty?(resources) do
+        {:ok, "No Ash resources found. Make sure your app is running and resources are loaded."}
+      else
+        text =
+          Enum.map_join(resources, "\n", fn r ->
+            actions = Enum.join(r.action_names, ", ")
+            rels = if r.relationship_names == [], do: "(none)", else: Enum.join(r.relationship_names, ", ")
+
+            """
+            #{r.resource}
+              Domain:        #{r.domain || "(none)"}
+              Primary key:   #{Enum.join(r.primary_key, ", ")}
+              Attributes:    #{Enum.join(r.attribute_names, ", ")}
+              Actions:       #{actions}
+              Relationships: #{rels}
+            """
+          end)
+
+        {:ok, "Found #{length(resources)} Ash resource(s):\n\n#{text}"}
+      end
+    end
+  end
+
+  defp get_ash_resource_info(%{"resource" => name}) do
+    unless AshInspector.available?() do
+      {:error, "Ash is not available in this application."}
+    else
+      case AshInspector.resource_info(name) do
+        {:ok, info} -> {:ok, Jason.encode!(info, pretty: true)}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  defp get_ash_resource_info(_), do: {:error, :invalid_arguments}
 end

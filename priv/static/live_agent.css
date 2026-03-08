@@ -422,6 +422,107 @@
   color: #cdd6f4;
 }
 
+/* ── Resources tab ──────────────────────────────────────────────────────────── */
+
+.la-res-domain {
+  margin-left: auto;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.la-res-detail {
+  margin-top: 10px;
+  border-top: 1px solid #313244;
+  padding-top: 10px;
+}
+
+.la-res-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  font-family: "SF Mono", "Fira Code", monospace;
+  margin-bottom: 4px;
+}
+
+.la-res-table tr:hover td {
+  background: #1e1e2e;
+}
+
+.la-res-table td {
+  padding: 3px 6px 3px 0;
+  vertical-align: middle;
+}
+
+.la-res-col-name {
+  color: #cdd6f4;
+  font-weight: 500;
+  min-width: 100px;
+}
+
+.la-res-col-type {
+  color: #89b4fa;
+  min-width: 80px;
+}
+
+.la-res-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-family: "SF Mono", "Fira Code", monospace;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.la-res-pk      { background: #3a2a1a; color: #fab387; }
+.la-res-rel     { background: #1a2a3f; color: #89b4fa; }
+.la-res-type-create  { background: #1a3a2a; color: #a6e3a1; }
+.la-res-type-read    { background: #1a2a3f; color: #89b4fa; }
+.la-res-type-update  { background: #3a3020; color: #f9e2af; }
+.la-res-type-destroy { background: #3a1a1a; color: #f38ba8; }
+.la-res-type-action  { background: #2a1a3a; color: #cba6f7; }
+
+.la-res-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.la-res-action-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  flex-wrap: wrap;
+}
+
+.la-res-action-name {
+  color: #cdd6f4;
+  font-family: "SF Mono", "Fira Code", monospace;
+  font-weight: 500;
+  min-width: 90px;
+}
+
+.la-res-primary {
+  color: #cba6f7;
+  margin-left: 1px;
+}
+
+.la-res-rels {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.la-res-rel-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+
 /* ── Standalone (new tab) mode ──────────────────────────────────────────────── */
 
 #la-panel.la-panel-standalone {

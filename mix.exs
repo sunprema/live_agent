@@ -27,7 +27,8 @@ defmodule LiveAgent.MixProject do
     [
       {:plug, "~> 1.14"},
       {:jason, "~> 1.4"},
-      {:phoenix_live_view, ">= 0.18.0", optional: true}
+      {:phoenix_live_view, ">= 0.18.0", optional: true},
+      {:ash, "~> 3.0", optional: true}
     ]
   end
 
