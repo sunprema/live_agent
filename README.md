@@ -8,19 +8,29 @@ Think of it as `live_debugger` but as an MCP server — giving Claude Code live 
 
 ## What it does
 
+## Screenshots
+
+**Inline panel** — docked to the bottom of your app, showing active LiveViews and their assigns:
+
+![LiveAgent inline panel](screenshots/live_agent_inline_view.png)
+
+**Standalone view** — open in a new tab with multiple panels visible at once (LiveViews, Resources, and Events side by side):
+
+![LiveAgent standalone split view](screenshots/live_agent_new_tab_view.png)
+
 ### In-browser panel
 
 LiveAgent auto-injects a **bottom panel** into every page of your app (dev only). Click the **⚡ LA** button in the bottom-right corner to open it.
 
 The panel has four tabs:
 
-| Tab            | What it shows                                                                     |
-| -------------- | --------------------------------------------------------------------------------- |
-| **LiveViews**  | All active LiveView processes — click `▶` to expand assigns inline               |
-| **Selected**   | The DOM element you picked with the element picker                                |
-| **Context**    | The element you pinned for Claude to read                                         |
-| **Events**     | Live log of `handle_event`, `mount`, `handle_params`, and `handle_info` calls    |
-| **Resources**  | All Ash resources — click `▶` to expand attributes, actions, and relationships   |
+| Tab           | What it shows                                                                  |
+| ------------- | ------------------------------------------------------------------------------ |
+| **LiveViews** | All active LiveView processes — click `▶` to expand assigns inline             |
+| **Selected**  | The DOM element you picked with the element picker                             |
+| **Context**   | The element you pinned for Claude to read                                      |
+| **Events**    | Live log of `handle_event`, `mount`, `handle_params`, and `handle_info` calls  |
+| **Resources** | All Ash resources — click `▶` to expand attributes, actions, and relationships |
 
 **Element picker** — click **🔍 Pick**, then click any element on the page. LiveAgent captures its HTML, CSS classes, Phoenix attributes (`phx-click`, `data-phx-component`, etc.), and parent chain. Click **📋 Pin to Claude Context** to make it available to Claude via MCP.
 
@@ -32,17 +42,17 @@ The panel has four tabs:
 
 Claude Code can call these tools while you work:
 
-| Tool                   | Description                                                           |
-| ---------------------- | --------------------------------------------------------------------- |
-| `list_live_views`      | Lists all active LiveView processes (PID, view module, assign keys)   |
-| `get_assigns`          | Returns the full assigns map for a LiveView — the live data on screen |
-| `get_assign`           | Returns a single assign value by key                                  |
-| `get_socket_info`      | Returns full socket metadata (view, IDs, transport, assigns)          |
-| `watch_assigns`        | Snapshot assigns at this moment (call repeatedly to track changes)    |
-| `get_selected_element`   | Returns the element most recently picked in the browser panel                     |
-| `get_pinned_context`     | Returns the element the user explicitly pinned for Claude                         |
-| `list_ash_resources`     | Lists all Ash resources with attributes, actions, and relationships (Ash only)    |
-| `get_ash_resource_info`  | Full introspection of a single Ash resource — types, constraints, actions, etc.   |
+| Tool                    | Description                                                                     |
+| ----------------------- | ------------------------------------------------------------------------------- |
+| `list_live_views`       | Lists all active LiveView processes (PID, view module, assign keys)             |
+| `get_assigns`           | Returns the full assigns map for a LiveView — the live data on screen           |
+| `get_assign`            | Returns a single assign value by key                                            |
+| `get_socket_info`       | Returns full socket metadata (view, IDs, transport, assigns)                    |
+| `watch_assigns`         | Snapshot assigns at this moment (call repeatedly to track changes)              |
+| `get_selected_element`  | Returns the element most recently picked in the browser panel                   |
+| `get_pinned_context`    | Returns the element the user explicitly pinned for Claude                       |
+| `list_ash_resources`    | Lists all Ash resources with attributes, actions, and relationships (Ash only)  |
+| `get_ash_resource_info` | Full introspection of a single Ash resource — types, constraints, actions, etc. |
 
 ---
 
@@ -173,19 +183,19 @@ If your app uses [Ash](https://ash-hq.org), LiveAgent gives Claude direct access
 
 **In the panel** — open the **Resources** tab to visually browse all your resources. Each resource expands to show:
 
-| Section        | Details                                                              |
-| -------------- | -------------------------------------------------------------------- |
-| Attributes     | Name, type, PK badge, required/nil-ok, read-only flag               |
-| Actions        | Name, type (color-coded), accepted attributes, arguments. Primary actions marked with `*` |
-| Relationships  | Name, type (`belongs_to`, `has_many`, etc.), destination resource    |
-| Calculations   | Names listed as chips                                                |
-| Aggregates     | Name and kind listed as chips                                        |
+| Section       | Details                                                                                   |
+| ------------- | ----------------------------------------------------------------------------------------- |
+| Attributes    | Name, type, PK badge, required/nil-ok, read-only flag                                     |
+| Actions       | Name, type (color-coded), accepted attributes, arguments. Primary actions marked with `*` |
+| Relationships | Name, type (`belongs_to`, `has_many`, etc.), destination resource                         |
+| Calculations  | Names listed as chips                                                                     |
+| Aggregates    | Name and kind listed as chips                                                             |
 
 **Via MCP** — Claude can call these tools before writing any Ash code:
 
-- *"What actions does MyApp.Accounts.User have?"* → `list_ash_resources`
-- *"Add a `:suspend` action to the User resource"* → Claude calls `get_ash_resource_info` first to understand the existing structure, then makes the change
-- *"What attributes does MyApp.Blog.Post accept on create?"* → `get_ash_resource_info`
+- _"What actions does MyApp.Accounts.User have?"_ → `list_ash_resources`
+- _"Add a `:suspend` action to the User resource"_ → Claude calls `get_ash_resource_info` first to understand the existing structure, then makes the change
+- _"What attributes does MyApp.Blog.Post accept on create?"_ → `get_ash_resource_info`
 
 No configuration needed — LiveAgent scans all loaded BEAM modules at runtime to find Ash resources automatically.
 

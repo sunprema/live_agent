@@ -7,7 +7,7 @@
 
   const state = {
     visible: false,
-    activeTab: "liveviews",
+    openPanes: ["liveviews"],
     liveViews: [],
     expandedPids: {},
     assignsCache: {},
@@ -92,7 +92,6 @@
   }
 
   function captureElement(el) {
-    // Collect all phx-* and data-phx-* attributes walking up the tree
     const phx = {};
     let node = el;
     while (node && node !== document.documentElement) {
@@ -132,7 +131,6 @@
     };
 
     state.selectedElement = data;
-    state.activeTab = "selected";
 
     fetch(BASE + "/api/element", {
       method: "POST",
@@ -140,7 +138,8 @@
       body: JSON.stringify(data),
     }).catch(() => {});
 
-    renderAll();
+    if (!state.openPanes.includes("selected")) addPane("selected");
+    else renderPaneContent("selected");
   }
 
   // ─── API ───────────────────────────────────────────────────────────────────
@@ -150,7 +149,7 @@
       .then((r) => r.json())
       .then((views) => {
         state.liveViews = views;
-        if (state.activeTab === "liveviews") renderPane("liveviews");
+        if (state.openPanes.includes("liveviews")) renderPaneContent("liveviews");
       })
       .catch(() => {});
   }
@@ -164,14 +163,15 @@
   function apiPin() {
     return fetch(BASE + "/api/pin", { method: "POST" }).then(() => {
       state.pinnedContext = state.selectedElement;
-      renderAll();
+      if (!state.openPanes.includes("context")) addPane("context");
+      else renderPaneContent("context");
     });
   }
 
   function apiClearPin() {
     return fetch(BASE + "/api/pin", { method: "DELETE" }).then(() => {
       state.pinnedContext = null;
-      renderAll();
+      renderPaneContent("context");
     });
   }
 
@@ -180,10 +180,9 @@
       .then((r) => r.json())
       .then((newEvents) => {
         if (!newEvents.length) return;
-        // prepend newest events; server returns them newest-first
         state.events = newEvents.concat(state.events).slice(0, 200);
         state.lastEventId = newEvents[0].id;
-        if (state.activeTab === "events") renderPane("events");
+        if (state.openPanes.includes("events")) renderPaneContent("events");
       })
       .catch(() => {});
   }
@@ -197,7 +196,7 @@
       .catch(() => {})
       .finally(() => {
         state.ashResourcesLoaded = true;
-        if (state.activeTab === "resources") renderPane("resources");
+        if (state.openPanes.includes("resources")) renderPaneContent("resources");
       });
   }
 
@@ -211,7 +210,7 @@
     return fetch(BASE + "/api/events", { method: "DELETE" }).then(() => {
       state.events = [];
       state.lastEventId = 0;
-      renderPane("events");
+      renderPaneContent("events");
     });
   }
 
@@ -235,12 +234,12 @@
       ${standalone ? "" : `<button id="la-toggle" title="Open LiveAgent panel">&#9889; LA</button>`}
       <div id="la-panel" class="${standalone ? "la-panel-standalone" : ""}">
         <div id="la-bar">
-          <div id="la-tabs">
-            <button class="la-tab" data-tab="liveviews">LiveViews</button>
-            <button class="la-tab" data-tab="selected">Selected</button>
-            <button class="la-tab" data-tab="context">Context</button>
-            <button class="la-tab" data-tab="events">Events</button>
-            <button class="la-tab" data-tab="resources">Resources</button>
+          <div id="la-launcher">
+            <button class="la-launch-btn" data-pane="liveviews">LiveViews</button>
+            <button class="la-launch-btn" data-pane="selected">Selected</button>
+            <button class="la-launch-btn" data-pane="context">Context</button>
+            <button class="la-launch-btn" data-pane="events">Events</button>
+            <button class="la-launch-btn" data-pane="resources">Resources</button>
           </div>
           <div id="la-bar-right">
             <button id="la-pick-btn">&#128269; Pick</button>
@@ -249,13 +248,7 @@
             ${closeBtn}
           </div>
         </div>
-        <div id="la-body">
-          <div id="la-pane-liveviews" class="la-pane"></div>
-          <div id="la-pane-selected" class="la-pane"></div>
-          <div id="la-pane-context" class="la-pane"></div>
-          <div id="la-pane-events" class="la-pane"></div>
-          <div id="la-pane-resources" class="la-pane"></div>
-        </div>
+        <div id="la-split"></div>
       </div>
     `;
 
@@ -274,18 +267,16 @@
       );
     }
 
-    root.querySelectorAll(".la-tab").forEach((btn) => {
-      btn.addEventListener("click", () => switchTab(btn.dataset.tab));
+    document.querySelectorAll(".la-launch-btn").forEach((btn) => {
+      btn.addEventListener("click", () => togglePane(btn.dataset.pane));
     });
 
     if (standalone) {
-      // In standalone mode, panel is always visible — start immediately
       state.visible = true;
+      rebuildSplit();
       fetchLiveViews();
       state._pollTimer = setInterval(fetchLiveViews, 3000);
     }
-
-    switchTab("liveviews");
   }
 
   // ─── Panel Controls ────────────────────────────────────────────────────────
@@ -296,6 +287,7 @@
     state.visible = true;
     document.getElementById("la-panel").style.display = "flex";
     document.getElementById("la-toggle").style.display = "none";
+    rebuildSplit();
     fetchLiveViews();
     state._pollTimer = setInterval(fetchLiveViews, 3000);
   }
@@ -321,34 +313,158 @@
     else startPicker();
   }
 
-  function switchTab(tab) {
-    // Stop events polling when leaving events tab
-    if (state.activeTab === "events" && tab !== "events") {
-      clearInterval(state._eventsTimer);
-      state._eventsTimer = null;
-    }
+  // ─── Pane Management ───────────────────────────────────────────────────────
 
-    state.activeTab = tab;
-    document.querySelectorAll(".la-tab").forEach((b) =>
-      b.classList.toggle("la-active", b.dataset.tab === tab)
-    );
-    document.querySelectorAll(".la-pane").forEach((p) => (p.style.display = "none"));
-    const pane = document.getElementById("la-pane-" + tab);
-    if (pane) pane.style.display = "block";
+  function paneTitle(name) {
+    const titles = {
+      liveviews: "LiveViews",
+      selected: "Selected",
+      context: "Context",
+      events: "Events",
+      resources: "Resources",
+    };
+    return titles[name] || name;
+  }
 
-    // Start events polling when entering events tab
-    if (tab === "events" && !state._eventsTimer) {
+  function addPane(name) {
+    if (state.openPanes.includes(name)) return;
+    state.openPanes.push(name);
+    rebuildSplit();
+    if (name === "events" && !state._eventsTimer) {
       fetchEvents();
       state._eventsTimer = setInterval(fetchEvents, 1500);
     }
-
-    // Fetch resources once on first open
-    if (tab === "resources" && !state.ashResourcesLoaded) {
+    if (name === "resources" && !state.ashResourcesLoaded) {
       fetchAshResources();
+    } else {
+      renderPaneContent(name);
+    }
+    updateLauncher();
+  }
+
+  function removePane(name) {
+    state.openPanes = state.openPanes.filter((p) => p !== name);
+    if (name === "events" && !state.openPanes.includes("events")) {
+      clearInterval(state._eventsTimer);
+      state._eventsTimer = null;
+    }
+    rebuildSplit();
+    updateLauncher();
+  }
+
+  function togglePane(name) {
+    if (state.openPanes.includes(name)) removePane(name);
+    else addPane(name);
+  }
+
+  function rebuildSplit() {
+    const container = document.getElementById("la-split");
+    if (!container) return;
+
+    if (!state.openPanes.length) {
+      container.innerHTML = '<div class="la-split-empty">Click a panel button above to open it.</div>';
+      return;
     }
 
-    renderPane(tab);
+    container.innerHTML = state.openPanes
+      .map((name, i) => {
+        const isLast = i === state.openPanes.length - 1;
+        const divider = isLast
+          ? ""
+          : `<div class="la-split-divider" data-idx="${i}"></div>`;
+        return `
+          <div class="la-split-pane" data-pane="${name}">
+            <div class="la-pane-header">
+              <span class="la-pane-title">${escHtml(paneTitle(name))}</span>
+              <button class="la-pane-close" data-pane="${name}">&#10005;</button>
+            </div>
+            <div class="la-pane-body" id="la-pane-${name}"></div>
+          </div>
+          ${divider}
+        `;
+      })
+      .join("");
+
+    container.querySelectorAll(".la-pane-close").forEach((btn) => {
+      btn.addEventListener("click", () => removePane(btn.dataset.pane));
+    });
+
+    container.querySelectorAll(".la-split-divider").forEach((div) => {
+      div.addEventListener("mousedown", (e) =>
+        startDividerDrag(e, parseInt(div.dataset.idx))
+      );
+    });
+
+    state.openPanes.forEach((name) => renderPaneContent(name));
+    updateLauncher();
+
+    // Start events polling if events pane was just built
+    if (state.openPanes.includes("events") && !state._eventsTimer) {
+      fetchEvents();
+      state._eventsTimer = setInterval(fetchEvents, 1500);
+    }
   }
+
+  function updateLauncher() {
+    document.querySelectorAll(".la-launch-btn").forEach((btn) => {
+      btn.classList.toggle("la-launch-active", state.openPanes.includes(btn.dataset.pane));
+    });
+  }
+
+  // ─── Divider Drag ──────────────────────────────────────────────────────────
+
+  let _dragState = null;
+
+  function startDividerDrag(e, idx) {
+    e.preventDefault();
+    const container = document.getElementById("la-split");
+    const panes = Array.from(container.querySelectorAll(".la-split-pane"));
+    if (idx >= panes.length - 1) return;
+    const left = panes[idx];
+    const right = panes[idx + 1];
+    const startX = e.clientX;
+    const startLeftW = left.offsetWidth;
+    const startRightW = right.offsetWidth;
+
+    _dragState = { left, right, startX, startLeftW, startRightW };
+
+    document.addEventListener("mousemove", onDividerMove);
+    document.addEventListener("mouseup", stopDividerDrag);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+
+    // Mark active divider
+    const dividers = container.querySelectorAll(".la-split-divider");
+    if (dividers[idx]) dividers[idx].classList.add("la-dragging");
+  }
+
+  function onDividerMove(e) {
+    if (!_dragState) return;
+    const { left, right, startX, startLeftW, startRightW } = _dragState;
+    const dx = e.clientX - startX;
+    const minW = 120;
+    let newLeftW = startLeftW + dx;
+    let newRightW = startRightW - dx;
+    if (newLeftW < minW) { newLeftW = minW; newRightW = startLeftW + startRightW - minW; }
+    if (newRightW < minW) { newRightW = minW; newLeftW = startLeftW + startRightW - minW; }
+    left.style.flexBasis = newLeftW + "px";
+    left.style.flexGrow = "0";
+    right.style.flexBasis = newRightW + "px";
+    right.style.flexGrow = "0";
+  }
+
+  function stopDividerDrag() {
+    _dragState = null;
+    document.removeEventListener("mousemove", onDividerMove);
+    document.removeEventListener("mouseup", stopDividerDrag);
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+    document.querySelectorAll(".la-split-divider.la-dragging").forEach((d) =>
+      d.classList.remove("la-dragging")
+    );
+  }
+
+  // ─── Pane Renderers ────────────────────────────────────────────────────────
 
   function renderPickBtn() {
     const btn = document.getElementById("la-pick-btn");
@@ -362,51 +478,42 @@
     }
   }
 
-  function renderAll() {
-    renderPane(state.activeTab);
-    renderPickBtn();
-  }
-
-  // ─── Pane Renderers ────────────────────────────────────────────────────────
-
-  function renderPane(tab) {
-    const el = document.getElementById("la-pane-" + tab);
+  function renderPaneContent(name) {
+    const el = document.getElementById("la-pane-" + name);
     if (!el) return;
-    if (tab === "liveviews") el.innerHTML = renderLiveViews();
-    if (tab === "selected") el.innerHTML = renderSelected();
-    if (tab === "context") el.innerHTML = renderContext();
-    if (tab === "events") el.innerHTML = renderEvents();
-    if (tab === "resources") el.innerHTML = renderResources();
-    attachPaneEvents(el, tab);
+    if (name === "liveviews") el.innerHTML = renderLiveViews();
+    if (name === "selected") el.innerHTML = renderSelected();
+    if (name === "context") el.innerHTML = renderContext();
+    if (name === "events") el.innerHTML = renderEvents();
+    if (name === "resources") el.innerHTML = renderResources();
+    attachPaneEvents(el, name);
   }
 
-  function attachPaneEvents(el, tab) {
-    // Expand/collapse assigns
+  function attachPaneEvents(el, name) {
     el.querySelectorAll(".la-expand-btn").forEach((btn) => {
       btn.addEventListener("click", () => toggleAssigns(btn.dataset.pid, btn));
     });
 
-    if (tab === "selected") {
+    if (name === "selected") {
       const pin = el.querySelector("#la-pin-btn");
       if (pin) pin.addEventListener("click", apiPin);
     }
 
-    if (tab === "context") {
+    if (name === "context") {
       const clear = el.querySelector("#la-clear-btn");
       if (clear) clear.addEventListener("click", apiClearPin);
     }
 
-    if (tab === "resources") {
+    if (name === "resources") {
       el.querySelectorAll(".la-res-expand-btn").forEach((btn) => {
         btn.addEventListener("click", () => toggleResource(btn.dataset.resource, btn));
       });
     }
 
-    if (tab === "events") {
+    if (name === "events") {
       const clear = el.querySelector("#la-events-clear");
       if (clear) clear.addEventListener("click", apiClearEvents);
 
-      // Expand/collapse event params on row click
       el.querySelectorAll(".la-event-row").forEach((row) => {
         row.addEventListener("click", () => {
           const params = row.nextElementSibling;
@@ -465,9 +572,10 @@
         const expanded = !!state.expandedPids[v.pid_string];
         const cached = state.assignsCache[v.pid_string];
 
-        const assignsBody = expanded && cached
-          ? '<pre class="la-pre">' + escHtml(JSON.stringify(cached, null, 2)) + "</pre>"
-          : "";
+        const assignsBody =
+          expanded && cached
+            ? '<pre class="la-pre">' + escHtml(JSON.stringify(cached, null, 2)) + "</pre>"
+            : "";
 
         return `<div class="la-card">
           <div class="la-card-header">
@@ -618,15 +726,17 @@
       return '<div class="la-empty">No Ash resources found.<br><span class="la-dim">Make sure Ash is installed and your resources are loaded.</span></div>';
     }
 
-    return state.ashResources.map((r) => {
-      const name = r.resource;
-      const safeId = name.replace(/[^a-zA-Z0-9]/g, "_");
-      const expanded = !!state.expandedResources[name];
-      const cached = state.resourceCache[name];
-      const attrs = (r.attribute_names || []).slice(0, 10);
-      const extra = (r.attribute_names || []).length > 10 ? (r.attribute_names.length - 10) : 0;
+    return state.ashResources
+      .map((r) => {
+        const name = r.resource;
+        const safeId = name.replace(/[^a-zA-Z0-9]/g, "_");
+        const expanded = !!state.expandedResources[name];
+        const cached = state.resourceCache[name];
+        const attrs = (r.attribute_names || []).slice(0, 10);
+        const extra =
+          (r.attribute_names || []).length > 10 ? r.attribute_names.length - 10 : 0;
 
-      return `<div class="la-card">
+        return `<div class="la-card">
         <div class="la-card-header">
           <button class="la-res-expand-btn la-expand-btn" data-resource="${escHtml(name)}">${expanded ? "\u25BC" : "\u25B6"}</button>
           <span class="la-view-name">${escHtml(shortName(name))}</span>
@@ -640,7 +750,8 @@
           ${expanded && cached ? renderResourceDetail(cached) : ""}
         </div>
       </div>`;
-    }).join("");
+      })
+      .join("");
   }
 
   function renderResourceDetail(info) {
@@ -650,39 +761,57 @@
     const calcs = info.calculations || [];
     const aggs = info.aggregates || [];
 
-    const attrRows = attrs.map((a) => `
+    const attrRows = attrs
+      .map(
+        (a) => `
       <tr>
         <td class="la-res-col-name">${escHtml(a.name)}</td>
         <td class="la-res-col-type">${escHtml(a.type || "?")}</td>
         <td>${a.primary_key ? '<span class="la-res-badge la-res-pk">PK</span>' : ""}</td>
         <td class="la-dim">${a.allow_nil ? "nil ok" : "required"}</td>
         <td class="la-dim">${a.writable === false ? "read-only" : ""}</td>
-      </tr>`).join("");
+      </tr>`
+      )
+      .join("");
 
-    const actionRows = actions.map((a) => {
-      const accept = a.accept && a.accept.length ? `<span class="la-dim">accept: ${escHtml(a.accept.join(", "))}</span>` : "";
-      const args = a.arguments && a.arguments.length
-        ? `<span class="la-dim">args: ${escHtml(a.arguments.map((x) => x.name).join(", "))}</span>`
-        : "";
-      return `<div class="la-res-action-row">
+    const actionRows = actions
+      .map((a) => {
+        const accept =
+          a.accept && a.accept.length
+            ? `<span class="la-dim">accept: ${escHtml(a.accept.join(", "))}</span>`
+            : "";
+        const args =
+          a.arguments && a.arguments.length
+            ? `<span class="la-dim">args: ${escHtml(a.arguments.map((x) => x.name).join(", "))}</span>`
+            : "";
+        return `<div class="la-res-action-row">
         <span class="la-res-action-name">${escHtml(a.name)}${a.primary ? '<span class="la-res-primary">*</span>' : ""}</span>
         <span class="la-res-badge la-res-type-${escHtml(a.type)}">${escHtml(a.type)}</span>
         ${accept}${args}
       </div>`;
-    }).join("");
+      })
+      .join("");
 
-    const relRows = rels.map((r) => `
+    const relRows = rels
+      .map(
+        (r) => `
       <div class="la-res-rel-row">
         <span class="la-res-col-name">${escHtml(r.name)}</span>
         <span class="la-res-badge la-res-rel">${escHtml(r.type)}</span>
         <span class="la-dim">\u2192 ${escHtml(r.destination)}</span>
-      </div>`).join("");
+      </div>`
+      )
+      .join("");
 
-    const calcRows = calcs.length ? calcs.map((c) =>
-      `<span class="la-chip">${escHtml(c.name)}</span>`).join("") : "";
+    const calcRows = calcs.length
+      ? calcs.map((c) => `<span class="la-chip">${escHtml(c.name)}</span>`).join("")
+      : "";
 
-    const aggRows = aggs.length ? aggs.map((a) =>
-      `<span class="la-chip">${escHtml(a.name)} (${escHtml(a.kind)})</span>`).join("") : "";
+    const aggRows = aggs.length
+      ? aggs
+          .map((a) => `<span class="la-chip">${escHtml(a.name)} (${escHtml(a.kind)})</span>`)
+          .join("")
+      : "";
 
     return `
       <div class="la-res-detail">
@@ -708,32 +837,40 @@
       </div>`;
 
     if (!state.events.length) {
-      return toolbar + '<div class="la-empty">No events yet.<br><span class="la-dim">Interact with the app — clicks, form changes, and navigations will appear here.</span></div>';
+      return (
+        toolbar +
+        '<div class="la-empty">No events yet.<br><span class="la-dim">Interact with the app — clicks, form changes, and navigations will appear here.</span></div>'
+      );
     }
 
-    const rows = state.events.map((ev) => {
-      const isError = ev.action === "exception";
-      const label = eventLabel(ev);
-      const badge = eventBadge(ev, isError);
-      const dur = durationBadge(ev.duration_ms, isError);
-      const name = ev.event ? `<span class="la-event-name">${escHtml(ev.event)}</span>` : "";
-      const uri = ev.uri ? `<span class="la-dim la-url">${escHtml(ev.uri)}</span>` : "";
-      const view = ev.component
-        ? escHtml(shortName(ev.component))
-        : ev.view
-        ? escHtml(shortName(ev.view))
-        : "";
-      const time = timeAgo(ev.timestamp);
-      const hasDetail = ev.params || ev.error || ev.uri;
+    const rows = state.events
+      .map((ev) => {
+        const isError = ev.action === "exception";
+        const label = eventLabel(ev);
+        const badge = eventBadge(ev, isError);
+        const dur = durationBadge(ev.duration_ms, isError);
+        const name = ev.event
+          ? `<span class="la-event-name">${escHtml(ev.event)}</span>`
+          : "";
+        const uri = ev.uri
+          ? `<span class="la-dim la-url">${escHtml(ev.uri)}</span>`
+          : "";
+        const view = ev.component
+          ? escHtml(shortName(ev.component))
+          : ev.view
+          ? escHtml(shortName(ev.view))
+          : "";
+        const time = timeAgo(ev.timestamp);
+        const hasDetail = ev.params || ev.error || ev.uri;
 
-      const detail = hasDetail
-        ? `<div class="la-event-params" style="display:none">
-            ${ev.error ? `<div class="la-event-error">${escHtml(ev.error)}</div>` : ""}
-            ${ev.params ? `<pre class="la-pre">${escHtml(JSON.stringify(ev.params, null, 2))}</pre>` : ""}
-           </div>`
-        : "";
+        const detail = hasDetail
+          ? `<div class="la-event-params" style="display:none">
+              ${ev.error ? `<div class="la-event-error">${escHtml(ev.error)}</div>` : ""}
+              ${ev.params ? `<pre class="la-pre">${escHtml(JSON.stringify(ev.params, null, 2))}</pre>` : ""}
+             </div>`
+          : "";
 
-      return `
+        return `
         <div class="la-event-row${isError ? " la-event-row-error" : ""}${hasDetail ? " la-event-row-clickable" : ""}">
           ${badge}
           <span class="la-event-label">${label}</span>
@@ -743,7 +880,8 @@
           <span class="la-event-right">${dur}<span class="la-event-time">${time}</span></span>
         </div>
         ${detail}`;
-    }).join("");
+      })
+      .join("");
 
     return toolbar + '<div class="la-event-list">' + rows + "</div>";
   }
@@ -760,12 +898,13 @@
 
   function eventBadge(ev, isError) {
     if (isError) return '<span class="la-ev-badge la-ev-error">error</span>';
-    const cls = {
-      handle_event: "la-ev-event",
-      mount: "la-ev-mount",
-      handle_params: "la-ev-params",
-      handle_info: "la-ev-info",
-    }[ev.type] || "la-ev-info";
+    const cls =
+      {
+        handle_event: "la-ev-event",
+        mount: "la-ev-mount",
+        handle_params: "la-ev-params",
+        handle_info: "la-ev-info",
+      }[ev.type] || "la-ev-info";
     return `<span class="la-ev-badge ${cls}">${eventLabel(ev)}</span>`;
   }
 
@@ -799,7 +938,6 @@
   }
 
   function shortName(view) {
-    // "Elixir.MyApp.SomeLive" -> "MyApp.SomeLive"
     return String(view).replace(/^Elixir\./, "");
   }
 
