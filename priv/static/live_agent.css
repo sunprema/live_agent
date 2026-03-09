@@ -437,21 +437,23 @@
 }
 
 .la-res-table {
-  width: 100%;
+  width: auto;
   border-collapse: collapse;
   font-size: 11px;
   font-family: "SF Mono", "Fira Code", monospace;
   margin-bottom: 4px;
 }
 
+.la-res-table td {
+  padding: 3px 12px 3px 0;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
 .la-res-table tr:hover td {
   background: #1e1e2e;
 }
 
-.la-res-table td {
-  padding: 3px 6px 3px 0;
-  vertical-align: middle;
-}
 
 .la-res-col-name {
   color: #cdd6f4;

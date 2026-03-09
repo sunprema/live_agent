@@ -12,10 +12,11 @@ defmodule LiveAgent.AshInspector do
   much faster than scanning every loaded module.
   """
   def list_resources do
-    find_ash_domains()
-    |> Enum.flat_map(fn domain ->
-      safe(fn -> Ash.Domain.Info.resources(domain) end, [])
+    project_apps()
+    |> Enum.flat_map(fn app ->
+      safe(fn -> apply(Ash.Info, :domains_and_resources, [app]) end, [])
     end)
+    |> Enum.flat_map(fn {_domain, resources} -> resources end)
     |> Enum.uniq()
     |> Enum.map(&resource_summary/1)
     |> Enum.sort_by(& &1.resource)
@@ -35,16 +36,13 @@ defmodule LiveAgent.AshInspector do
 
   # ── Resource discovery ─────────────────────────────────────────────────────
 
-  defp find_ash_domains do
-    :code.all_loaded()
-    |> Enum.map(fn {mod, _} -> mod end)
-    |> Enum.filter(&ash_domain?/1)
-  end
-
-  defp ash_domain?(mod) do
-    Spark.Dsl.is?(mod, Ash.Domain)
-  rescue
-    _ -> false
+  # Returns only the current project's apps (umbrella-aware), not deps.
+  defp project_apps do
+    if apps_paths = Mix.Project.apps_paths() do
+      Enum.filter(Mix.Project.deps_apps(), &is_map_key(apps_paths, &1))
+    else
+      [Mix.Project.config()[:app]]
+    end
   end
 
   defp find_resource(name) do
