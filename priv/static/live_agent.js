@@ -12,6 +12,7 @@
     expandedPids: {},
     assignsCache: {},
     selectedElement: null,
+    selectedComponent: null,
     pinnedContext: null,
     pickerActive: false,
     _pickerTarget: null,
@@ -131,12 +132,21 @@
     };
 
     state.selectedElement = data;
+    state.selectedComponent = null;
 
     fetch(BASE + "/api/element", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(data),
-    }).catch(() => {});
+    })
+      .then((r) => r.json())
+      .then((resp) => {
+        if (resp.component) {
+          state.selectedComponent = resp.component;
+          if (state.openPanes.includes("selected")) renderPaneContent("selected");
+        }
+      })
+      .catch(() => {});
 
     if (!state.openPanes.includes("selected")) addPane("selected");
     else renderPaneContent("selected");
@@ -607,9 +617,26 @@
     const phxEntries = Object.entries(el.phx || {});
     const tag = `&lt;${escHtml(el.tag)}${el.id ? ' id="' + escHtml(el.id) + '"' : ""}${el.classes.length ? ' class="' + escHtml(el.classes.slice(0, 4).join(" ")) + '"' : ""}&gt;`;
 
+    const comp = state.selectedComponent;
+    const componentHtml = comp
+      ? `<div class="la-section-label">Component</div>
+        <div class="la-component-info">
+          <span class="la-component-module">${escHtml(shortName(comp.module))}</span>
+          ${comp.id ? `<span class="la-dim la-component-id">id: <code>${escHtml(comp.id)}</code></span>` : ""}
+        </div>
+        <div class="la-chips">
+          ${(comp.assign_keys || []).map((k) => `<span class="la-chip">${escHtml(k)}</span>`).join("")}
+        </div>`
+      : el.phx && el.phx["data-phx-component"]
+      ? `<div class="la-section-label">Component</div>
+        <div class="la-dim" style="font-size:11px;padding:2px 0">Resolving\u2026</div>`
+      : "";
+
     return `<div class="la-card">
       <div class="la-element-tag">${tag}</div>
       ${el.text ? `<div class="la-text-preview la-dim">${escHtml(el.text.slice(0, 120))}</div>` : ""}
+
+      ${componentHtml}
 
       ${
         phxEntries.length

@@ -39,11 +39,13 @@ defmodule LiveAgent do
     <script src="/live_agent/js"></script>
     """
 
-    body =
-      conn.resp_body
-      |> IO.iodata_to_binary()
-      |> String.replace(~r|</body>|i, "#{snippet}</body>", global: false)
+    body = IO.iodata_to_binary(conn.resp_body)
 
-    %{conn | resp_body: body}
+    # Parse and store the component tree while we have the raw HTML
+    tree = LiveAgent.ComponentTreeParser.extract(body)
+    if tree.view_id, do: LiveAgent.ComponentTreeStore.put(tree.view_id, tree)
+
+    new_body = String.replace(body, ~r|</body>|i, "#{snippet}</body>", global: false)
+    %{conn | resp_body: new_body}
   end
 end

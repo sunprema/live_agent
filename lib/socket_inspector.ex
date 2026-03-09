@@ -26,6 +26,43 @@ defmodule LiveAgent.SocketInspector do
   end
 
   @doc """
+  Resolves a component CID (the integer from data-phx-component) to its module,
+  id, and assign keys by scanning all running LiveView channel processes.
+  Returns a map or nil if not found.
+  """
+  def resolve_component_id(cid) when is_integer(cid) do
+    find_liveview_pids()
+    |> Enum.find_value(nil, fn pid ->
+      try do
+        case :sys.get_state(pid, 2000) do
+          %{components: {cid_to_component, _id_to_cid, _uuids}} when is_map(cid_to_component) ->
+            case Map.get(cid_to_component, cid) do
+              {module, id, assigns, _private, _fingerprints} ->
+                %{
+                  module: inspect(module),
+                  id: to_string(id),
+                  assign_keys:
+                    assigns
+                    |> Map.keys()
+                    |> Enum.reject(&internal_key?/1)
+                    |> Enum.map(&to_string/1)
+                    |> Enum.sort()
+                }
+
+              _ ->
+                nil
+            end
+
+          _ ->
+            nil
+        end
+      catch
+        :exit, _ -> nil
+      end
+    end)
+  end
+
+  @doc """
   Returns full socket metadata for a LiveView PID (pid or pid string).
   """
   def get_socket_info(pid) when is_pid(pid) do

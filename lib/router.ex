@@ -119,6 +119,40 @@ defmodule LiveAgent.Router do
     end
   end
 
+  get "/api/component_tree" do
+    trees = LiveAgent.ComponentTreeStore.all()
+    live_views = LiveAgent.SocketInspector.list_live_views()
+
+    result =
+      Enum.map(trees, fn {view_id, tree} ->
+        view_name =
+          Enum.find_value(live_views, fn lv ->
+            if lv.id == view_id, do: lv.view
+          end)
+
+        components =
+          Enum.map(tree.components, fn comp ->
+            resolved = LiveAgent.SocketInspector.resolve_component_id(comp.cid)
+
+            %{
+              cid: comp.cid,
+              dom_id: comp.dom_id,
+              module: resolved && resolved.module,
+              id: resolved && resolved.id,
+              assign_keys: (resolved && resolved.assign_keys) || [],
+              events: comp.events
+            }
+          end)
+
+        %{view: view_name, view_id: view_id, components: components}
+      end)
+
+    conn
+    |> put_resp_header("content-type", "application/json")
+    |> send_resp(200, Jason.encode!(result))
+    |> halt()
+  end
+
   get "/api/live_views" do
     views = LiveAgent.SocketInspector.list_live_views()
 
@@ -150,11 +184,25 @@ defmodule LiveAgent.Router do
   post "/api/element" do
     opts = Plug.Parsers.init(parsers: [:json], pass: [], json_decoder: Jason)
     conn = Plug.Parsers.call(conn, opts)
-    LiveAgent.BrowserStateStore.put_selected_element(conn.body_params)
+
+    component =
+      case get_in(conn.body_params, ["phx", "data-phx-component"]) do
+        nil ->
+          nil
+
+        cid_str ->
+          case Integer.parse(cid_str) do
+            {cid, _} -> LiveAgent.SocketInspector.resolve_component_id(cid)
+            _ -> nil
+          end
+      end
+
+    element = Map.put(conn.body_params, "component", component)
+    LiveAgent.BrowserStateStore.put_selected_element(element)
 
     conn
     |> put_resp_header("content-type", "application/json")
-    |> send_resp(200, "{\"ok\":true}")
+    |> send_resp(200, Jason.encode!(%{ok: true, component: component}))
     |> halt()
   end
 

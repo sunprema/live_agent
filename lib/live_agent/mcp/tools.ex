@@ -123,6 +123,25 @@ defmodule LiveAgent.MCP.Tools do
         callback: &get_ash_resource_info/1
       },
       %{
+        name: "get_component_tree",
+        description: """
+        Returns the LiveComponent tree for the current page, parsed directly from the last
+        rendered HTML response. For each component shows:
+          - cid: the integer from data-phx-component (component ID within the socket)
+          - module: the LiveComponent module name (e.g. "MyApp.FormComponent")
+          - id: the component's id as passed in the template
+          - dom_id: the id attribute on the component's root DOM element
+          - assign_keys: the component's current assign keys (from BEAM state)
+          - events: phx-click/change/submit/etc. bindings wired within the component
+
+        Use this to understand which components are on screen and what events they handle
+        before modifying a LiveComponent. The tree is a snapshot from the last page load —
+        navigate to the page you care about first.
+        """,
+        inputSchema: %{type: "object", properties: %{}, required: []},
+        callback: &get_component_tree/1
+      },
+      %{
         name: "watch_assigns",
         description: """
         Snapshots assigns at this moment and returns them with a timestamp.
@@ -250,6 +269,60 @@ defmodule LiveAgent.MCP.Tools do
 
       context ->
         {:ok, Jason.encode!(context, pretty: true)}
+    end
+  end
+
+  defp get_component_tree(_args) do
+    trees = LiveAgent.ComponentTreeStore.all()
+
+    if map_size(trees) == 0 do
+      {:ok, "No component trees found. Navigate to a LiveView page first so LiveAgent can parse it."}
+    else
+      live_views = SocketInspector.list_live_views()
+
+      text =
+        Enum.map_join(trees, "\n\n", fn {view_id, tree} ->
+          view_name =
+            Enum.find_value(live_views, fn lv ->
+              if lv.id == view_id, do: lv.view
+            end) || "(unknown view)"
+
+          header = "View: #{view_name}  (#{view_id})"
+
+          if tree.components == [] do
+            header <> "\n  No LiveComponents found on this page."
+          else
+            component_lines =
+              Enum.map_join(tree.components, "\n", fn comp ->
+                resolved = SocketInspector.resolve_component_id(comp.cid)
+                module = (resolved && resolved.module) || "(unresolved)"
+                comp_id = (resolved && resolved.id) || comp.dom_id || "?"
+                assign_keys = (resolved && resolved.assign_keys) || []
+
+                events_str =
+                  if comp.events == [] do
+                    "(none)"
+                  else
+                    comp.events
+                    |> Enum.map(fn e -> "#{e.type}:#{e.name}" end)
+                    |> Enum.join(", ")
+                  end
+
+                keys_str = if assign_keys == [], do: "(none)", else: Enum.join(assign_keys, ", ")
+                dom_id_str = if comp.dom_id, do: "  dom_id:     #{comp.dom_id}\n", else: ""
+
+                "  [cid=#{comp.cid}] #{module}\n" <>
+                  "  id:         #{comp_id}\n" <>
+                  dom_id_str <>
+                  "  assigns:    [#{keys_str}]\n" <>
+                  "  events:     #{events_str}"
+              end)
+
+            header <> "\n" <> component_lines
+          end
+        end)
+
+      {:ok, text}
     end
   end
 

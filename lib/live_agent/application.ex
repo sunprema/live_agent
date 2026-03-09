@@ -3,7 +3,7 @@ defmodule LiveAgent.Application do
   use Application
 
   def start(_type, _args) do
-    children = [LiveAgent.BrowserStateStore, LiveAgent.EventStore]
+    children = [LiveAgent.BrowserStateStore, LiveAgent.EventStore, LiveAgent.ComponentTreeStore]
     Supervisor.start_link(children, strategy: :one_for_one, name: LiveAgent.Supervisor)
   end
 end

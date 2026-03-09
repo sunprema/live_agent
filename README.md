@@ -6,8 +6,6 @@ Think of it as `live_debugger` but as an MCP server — giving Claude Code live 
 
 ---
 
-## What it does
-
 ## Screenshots
 
 **Inline panel** — docked to the bottom of your app, showing active LiveViews and their assigns:
@@ -18,21 +16,27 @@ Think of it as `live_debugger` but as an MCP server — giving Claude Code live 
 
 ![LiveAgent standalone split view](screenshots/live_agent_new_tab_view.png)
 
+---
+
+## What it does
+
 ### In-browser panel
 
 LiveAgent auto-injects a **bottom panel** into every page of your app (dev only). Click the **⚡ LA** button in the bottom-right corner to open it.
 
-The panel has four tabs:
+The panel has five panels, each toggled independently from the launcher bar — open as many as you want side by side:
 
-| Tab           | What it shows                                                                  |
+| Panel         | What it shows                                                                  |
 | ------------- | ------------------------------------------------------------------------------ |
 | **LiveViews** | All active LiveView processes — click `▶` to expand assigns inline             |
-| **Selected**  | The DOM element you picked with the element picker                             |
+| **Selected**  | The DOM element you picked with the element picker, with component resolution  |
 | **Context**   | The element you pinned for Claude to read                                      |
 | **Events**    | Live log of `handle_event`, `mount`, `handle_params`, and `handle_info` calls  |
 | **Resources** | All Ash resources — click `▶` to expand attributes, actions, and relationships |
 
-**Element picker** — click **🔍 Pick**, then click any element on the page. LiveAgent captures its HTML, CSS classes, Phoenix attributes (`phx-click`, `data-phx-component`, etc.), and parent chain. Click **📋 Pin to Claude Context** to make it available to Claude via MCP.
+Click any panel button in the top bar to open or close it. Drag the divider between open panels to resize them. Click **↗** to open the whole panel in a new tab.
+
+**Element picker** — click **🔍 Pick**, then click any element on the page. LiveAgent captures its HTML, CSS classes, and Phoenix attributes (`phx-click`, `data-phx-component`, etc.). If the element belongs to a LiveComponent, the **Selected** panel automatically shows the component module, its `id`, and its current assign keys — resolved directly from the running BEAM process. Click **📋 Pin to Claude Context** to make it available to Claude via MCP.
 
 **Resources tab** — lists every Ash resource loaded in the running app. Click `▶` on any resource to expand a full breakdown: attributes with types and constraints, actions with their accepted fields and arguments, relationships with destination resources, and any calculations or aggregates. Loaded once when the tab is first opened. Requires Ash to be installed — the tab is still shown but displays a message if Ash is not available.
 
@@ -51,6 +55,7 @@ Claude Code can call these tools while you work:
 | `watch_assigns`         | Snapshot assigns at this moment (call repeatedly to track changes)              |
 | `get_selected_element`  | Returns the element most recently picked in the browser panel                   |
 | `get_pinned_context`    | Returns the element the user explicitly pinned for Claude                       |
+| `get_component_tree`    | LiveComponent tree for the current page — modules, ids, assign keys, and events |
 | `list_ash_resources`    | Lists all Ash resources with attributes, actions, and relationships (Ash only)  |
 | `get_ash_resource_info` | Full introspection of a single Ash resource — types, constraints, actions, etc. |
 
@@ -139,6 +144,10 @@ For assigns inspection it uses the same technique as [`live_debugger`](https://g
 3. Extracts the `%Phoenix.LiveView.Socket{}` and its `assigns` map
 4. Sanitizes assigns to be JSON-encodable (handles PIDs, structs, atoms, etc.)
 
+For component resolution (element picker and `get_component_tree`), LiveAgent reads the channel's internal `components` map (a `{cid_to_component, id_to_cid, uuids}` tuple) to look up a component integer CID and return the module name, `id`, and assign keys.
+
+For the component tree, the HTML response flowing through the Plug is regex-scanned in the same `register_before_send` pass used for panel injection. Each `data-phx-component="N"` element is captured with its DOM id and all `phx-*` event bindings, then stored in `ComponentTreeStore` keyed by `view_id` (`phx-FgX2...`).
+
 No instrumentation required in your LiveViews — it works with any existing Phoenix app.
 
 ---
@@ -198,6 +207,16 @@ If your app uses [Ash](https://ash-hq.org), LiveAgent gives Claude direct access
 - _"What attributes does MyApp.Blog.Post accept on create?"_ → `get_ash_resource_info`
 
 No configuration needed — LiveAgent scans all loaded BEAM modules at runtime to find Ash resources automatically.
+
+### Via the component tree
+
+`get_component_tree` gives Claude a structural map of the current page without reading source files:
+
+- _"What LiveComponents are on this page?"_ → `get_component_tree`
+- _"Add a `:loading` assign to the FormComponent"_ → Claude calls `get_component_tree` to find the module and its current assigns, then makes the change
+- _"Why isn't my save-form event firing?"_ → `get_component_tree` shows which component handles that event and its current assign keys
+
+The tree is parsed from the last HTML response LiveAgent intercepted. Navigate to the page you want to inspect first.
 
 ### Via assigns inspection
 

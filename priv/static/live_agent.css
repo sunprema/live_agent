@@ -422,6 +422,34 @@
   font-size: 11px;
 }
 
+/* ── Component info (element picker resolution) ─────────────────────────────── */
+
+.la-component-info {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.la-component-module {
+  color: #cba6f7;
+  font-family: "SF Mono", "Fira Code", monospace;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.la-component-id {
+  font-size: 11px;
+}
+
+.la-component-id code {
+  font-family: "SF Mono", "Fira Code", monospace;
+  background: #313244;
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: #a6e3a1;
+}
+
 /* ── Actions ────────────────────────────────────────────────────────────────── */
 
 .la-actions {
