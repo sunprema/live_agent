@@ -59,7 +59,10 @@ defmodule LiveAgent.ComponentTreeParser do
           %{
             cid: cid,
             dom_id: find_attr(tag_context, "id"),
-            events: extract_events(after_str)
+            events: extract_events(after_str),
+            forms: extract_forms(after_str),
+            inputs: extract_inputs(after_str),
+            buttons: extract_buttons(after_str)
           }
         ]
 
@@ -102,5 +105,82 @@ defmodule LiveAgent.ComponentTreeParser do
     Regex.scan(@event_pattern, html)
     |> Enum.map(fn [_, type, name] -> %{type: type, name: name} end)
     |> Enum.uniq_by(fn %{type: t, name: n} -> {t, n} end)
+  end
+
+  # ── Forms / inputs / buttons ──────────────────────────────────────────────
+
+  @form_open_pattern ~r/<form\b([^>]*)>/i
+  @input_pattern ~r/<input\b([^>]*?)\/?>/i
+  @textarea_open_pattern ~r/<textarea\b([^>]*?)>/i
+  @select_open_pattern ~r/<select\b([^>]*?)>/i
+  @button_pattern ~r/<button\b([^>]*?)>(.*?)<\/button>/is
+
+  defp extract_forms(html) do
+    Regex.scan(@form_open_pattern, html)
+    |> Enum.map(fn [_, attrs] ->
+      %{
+        id: find_attr(attrs, "id"),
+        phx_submit: find_attr(attrs, "phx-submit"),
+        phx_change: find_attr(attrs, "phx-change")
+      }
+    end)
+    |> Enum.reject(fn f -> is_nil(f.id) and is_nil(f.phx_submit) and is_nil(f.phx_change) end)
+    |> Enum.uniq()
+  end
+
+  defp extract_inputs(html) do
+    inputs =
+      Regex.scan(@input_pattern, html)
+      |> Enum.map(fn [_, attrs] ->
+        %{
+          name: find_attr(attrs, "name"),
+          type: find_attr(attrs, "type") || "text",
+          id: find_attr(attrs, "id")
+        }
+      end)
+
+    textareas =
+      Regex.scan(@textarea_open_pattern, html)
+      |> Enum.map(fn [_, attrs] ->
+        %{
+          name: find_attr(attrs, "name"),
+          type: "textarea",
+          id: find_attr(attrs, "id")
+        }
+      end)
+
+    selects =
+      Regex.scan(@select_open_pattern, html)
+      |> Enum.map(fn [_, attrs] ->
+        %{
+          name: find_attr(attrs, "name"),
+          type: "select",
+          id: find_attr(attrs, "id")
+        }
+      end)
+
+    (inputs ++ textareas ++ selects)
+    |> Enum.reject(fn i -> is_nil(i.name) and is_nil(i.id) end)
+    |> Enum.uniq()
+  end
+
+  defp extract_buttons(html) do
+    Regex.scan(@button_pattern, html)
+    |> Enum.map(fn [_, attrs, inner] ->
+      %{
+        id: find_attr(attrs, "id"),
+        type: find_attr(attrs, "type") || "submit",
+        phx_click: find_attr(attrs, "phx-click"),
+        text: inner |> strip_tags() |> String.trim() |> String.slice(0, 60)
+      }
+    end)
+    |> Enum.reject(fn b -> b.text == "" and is_nil(b.phx_click) and is_nil(b.id) end)
+    |> Enum.uniq()
+  end
+
+  defp strip_tags(html) do
+    html
+    |> String.replace(~r/<[^>]*>/, " ")
+    |> String.replace(~r/\s+/, " ")
   end
 end

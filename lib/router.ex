@@ -140,7 +140,10 @@ defmodule LiveAgent.Router do
               module: resolved && resolved.module,
               id: resolved && resolved.id,
               assign_keys: (resolved && resolved.assign_keys) || [],
-              events: comp.events
+              events: comp.events,
+              forms: Map.get(comp, :forms, []),
+              inputs: Map.get(comp, :inputs, []),
+              buttons: Map.get(comp, :buttons, [])
             }
           end)
 
@@ -226,6 +229,67 @@ defmodule LiveAgent.Router do
     |> halt()
   end
 
+  get "/api/state_timeline" do
+    conn = fetch_query_params(conn)
+    last_n = conn.query_params |> Map.get("last_n", "20") |> parse_int(20)
+
+    result =
+      LiveAgent.SocketInspector.list_live_views()
+      |> Enum.map(fn lv ->
+        entries =
+          case LiveAgent.StateTimeline.history(lv.pid_string, last_n) do
+            list when is_list(list) -> Enum.map(list, &serialize_timeline_entry/1)
+            _ -> []
+          end
+
+        %{pid: lv.pid_string, view: lv.view, entries: entries}
+      end)
+
+    conn
+    |> put_resp_header("content-type", "application/json")
+    |> send_resp(200, Jason.encode!(result))
+    |> halt()
+  end
+
+  get "/api/async" do
+    LiveAgent.AsyncInspector.bump_activity()
+
+    result =
+      LiveAgent.SocketInspector.list_live_views()
+      |> Enum.map(fn lv ->
+        pending =
+          case LiveAgent.AsyncInspector.pending(lv.pid_string) do
+            list when is_list(list) -> list
+            _ -> []
+          end
+
+        history =
+          case LiveAgent.AsyncInspector.history(lv.pid_string, 25) do
+            list when is_list(list) -> Enum.map(list, &serialize_async_entry/1)
+            _ -> []
+          end
+
+        async_results =
+          case LiveAgent.AsyncRegistry.list_async_results(lv.pid_string) do
+            {:ok, r} -> r
+            _ -> []
+          end
+
+        %{
+          pid: lv.pid_string,
+          view: lv.view,
+          pending: pending,
+          history: history,
+          async_results: async_results
+        }
+      end)
+
+    conn
+    |> put_resp_header("content-type", "application/json")
+    |> send_resp(200, Jason.encode!(result))
+    |> halt()
+  end
+
   delete "/api/events" do
     LiveAgent.EventStore.clear()
 
@@ -242,6 +306,43 @@ defmodule LiveAgent.Router do
     |> put_resp_header("content-type", "application/json")
     |> send_resp(200, "{\"ok\":true}")
     |> halt()
+  end
+
+  # Agent control: long-poll for commands the MCP side has enqueued.
+  get "/api/commands" do
+    commands = LiveAgent.CommandQueue.poll()
+
+    conn
+    |> put_resp_header("content-type", "application/json")
+    |> send_resp(200, Jason.encode!(commands))
+    |> halt()
+  end
+
+  # Agent control: panel reports the result of an executed command.
+  post "/api/commands/result" do
+    opts = Plug.Parsers.init(parsers: [:json], pass: [], json_decoder: Jason)
+    conn = Plug.Parsers.call(conn, opts)
+
+    with {:ok, id} <- fetch_command_id(conn.body_params),
+         result <- Map.drop(conn.body_params, ["id"]),
+         :ok <- LiveAgent.CommandQueue.post_result(id, result) do
+      conn
+      |> put_resp_header("content-type", "application/json")
+      |> send_resp(200, "{\"ok\":true}")
+      |> halt()
+    else
+      {:error, :not_found} ->
+        conn
+        |> put_resp_header("content-type", "application/json")
+        |> send_resp(404, Jason.encode!(%{error: "no waiter for that id"}))
+        |> halt()
+
+      {:error, reason} ->
+        conn
+        |> put_resp_header("content-type", "application/json")
+        |> send_resp(400, Jason.encode!(%{error: to_string(reason)}))
+        |> halt()
+    end
   end
 
   match "/*_ignored" do
@@ -263,6 +364,38 @@ defmodule LiveAgent.Router do
       )
       |> halt()
     end
+  end
+
+  defp fetch_command_id(%{"id" => id}) when is_integer(id), do: {:ok, id}
+
+  defp fetch_command_id(%{"id" => id}) when is_binary(id) do
+    case Integer.parse(id) do
+      {n, ""} -> {:ok, n}
+      _ -> {:error, :invalid_id}
+    end
+  end
+
+  defp fetch_command_id(_), do: {:error, :missing_id}
+
+  defp parse_int(value, default) when is_binary(value) do
+    case Integer.parse(value) do
+      {n, ""} when n > 0 -> n
+      _ -> default
+    end
+  end
+
+  defp parse_int(_, default), do: default
+
+  defp serialize_timeline_entry(entry) do
+    entry
+    |> Map.put(:duration_ms, entry.duration_us && div(entry.duration_us, 1000))
+    |> Map.update!(:at, &DateTime.to_iso8601/1)
+  end
+
+  defp serialize_async_entry(entry) do
+    entry
+    |> Map.put(:duration_ms, entry.duration_us && div(entry.duration_us, 1000))
+    |> Map.update!(:at, &DateTime.to_iso8601/1)
   end
 
   defp is_local?({127, 0, 0, _}), do: true

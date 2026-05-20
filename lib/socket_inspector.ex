@@ -124,7 +124,11 @@ defmodule LiveAgent.SocketInspector do
     end
   end
 
-  defp get_socket(pid) do
+  @doc """
+  Fetches the `%Phoenix.LiveView.Socket{}` for a LiveView channel pid.
+  Returns `{:ok, socket}` or `{:error, reason}`.
+  """
+  def get_socket(pid) when is_pid(pid) do
     try do
       case :sys.get_state(pid, 2000) do
         %{socket: %Phoenix.LiveView.Socket{} = socket} ->
@@ -144,7 +148,11 @@ defmodule LiveAgent.SocketInspector do
     end
   end
 
-  defp extract_assigns(%Phoenix.LiveView.Socket{assigns: assigns}) do
+  @doc """
+  Extracts a sanitized, JSON-serializable assigns map from a Socket struct.
+  Drops internal `__`-prefixed keys and converts atoms/structs to plain values.
+  """
+  def extract_assigns(%Phoenix.LiveView.Socket{assigns: assigns}) do
     assigns
     |> Map.reject(fn {k, _v} -> internal_key?(k) end)
     |> sanitize_map()
@@ -194,23 +202,111 @@ defmodule LiveAgent.SocketInspector do
   defp sanitize(v) when is_list(v), do: Enum.map(v, &sanitize/1)
 
   defp sanitize(v) when is_map(v) do
-    if Map.has_key?(v, :__struct__) do
-      try do
-        v |> Map.from_struct() |> sanitize_map()
-      rescue
-        _ -> inspect(v)
-      end
-    else
-      sanitize_map(v)
+    case Map.get(v, :__struct__) do
+      nil ->
+        sanitize_map(v)
+
+      mod ->
+        sanitize_struct(mod, v)
     end
   end
 
   defp sanitize(v), do: inspect(v)
 
+  defp sanitize_struct(DateTime, v) do
+    try do
+      DateTime.to_iso8601(v)
+    rescue
+      _ -> inspect(v)
+    end
+  end
+
+  defp sanitize_struct(NaiveDateTime, v) do
+    try do
+      NaiveDateTime.to_iso8601(v)
+    rescue
+      _ -> inspect(v)
+    end
+  end
+
+  defp sanitize_struct(Date, v) do
+    try do
+      Date.to_iso8601(v)
+    rescue
+      _ -> inspect(v)
+    end
+  end
+
+  defp sanitize_struct(Time, v) do
+    try do
+      Time.to_iso8601(v)
+    rescue
+      _ -> inspect(v)
+    end
+  end
+
+  defp sanitize_struct(mod, v) do
+    mod_str = Atom.to_string(mod)
+
+    cond do
+      mod_str == "Elixir.Ash.NotLoaded" ->
+        "<not loaded>"
+
+      mod_str == "Elixir.Decimal" ->
+        try do
+          apply(Decimal, :to_string, [v])
+        rescue
+          _ -> inspect(v)
+        end
+
+      mod_str == "Elixir.Phoenix.LiveView.AsyncResult" ->
+        %{
+          "__async_result__" => true,
+          "ok?" => Map.get(v, :ok?, false),
+          "loading" => sanitize(Map.get(v, :loading)),
+          "failed" => sanitize(Map.get(v, :failed)),
+          "result" => sanitize(Map.get(v, :result))
+        }
+
+      true ->
+        try do
+          v |> Map.from_struct() |> sanitize_map()
+        rescue
+          _ -> inspect(v)
+        end
+    end
+  end
+
+  @doc """
+  Extracts specific dot-path values from a sanitized assigns map.
+  E.g. ["current_user.email", "count"] → %{"current_user.email" => "...", "count" => 5}
+  """
+  def extract_paths(assigns, paths) when is_map(assigns) and is_list(paths) do
+    Map.new(paths, fn path ->
+      segments = String.split(path, ".")
+      {path, get_in_map(assigns, segments)}
+    end)
+  end
+
+  defp get_in_map(map, [key]) when is_map(map), do: Map.get(map, key, "<key not found>")
+
+  defp get_in_map(map, [key | rest]) when is_map(map) do
+    case Map.get(map, key) do
+      nested when is_map(nested) -> get_in_map(nested, rest)
+      nil -> nil
+      _ -> "<not a map>"
+    end
+  end
+
+  defp get_in_map(_, _), do: "<not a map>"
+
   defp pid_to_string(nil), do: nil
   defp pid_to_string(pid) when is_pid(pid), do: pid |> :erlang.pid_to_list() |> List.to_string()
 
-  defp parse_pid(str) do
+  @doc """
+  Parses a PID string like `"<0.123.0>"` back into a pid.
+  """
+  def parse_pid(str) when is_binary(str) do
     pid = str |> String.to_charlist() |> :erlang.list_to_pid()
     {:ok, pid}
   rescue

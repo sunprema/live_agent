@@ -98,6 +98,107 @@
   gap: 4px;
 }
 
+#la-drive-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: #cdd6f4;
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: #313244;
+  cursor: pointer;
+  user-select: none;
+}
+
+#la-drive-toggle input {
+  margin: 0;
+  cursor: pointer;
+  accent-color: #f9e2af;
+}
+
+#la-drive-toggle:has(input:checked) {
+  background: #45402a;
+  color: #f9e2af;
+  box-shadow: 0 0 0 1px #f9e2af inset;
+}
+
+.la-cmd-pill {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin: 0 6px 0 2px;
+  background: #6c7086;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+
+.la-cmd-pill.la-cmd-idle {
+  background: #6c7086;
+}
+
+.la-cmd-pill.la-cmd-connected {
+  background: #a6e3a1;
+  box-shadow: 0 0 4px #a6e3a1;
+}
+
+.la-cmd-pill.la-cmd-executing {
+  background: #f9e2af;
+  box-shadow: 0 0 6px #f9e2af;
+  animation: la-cmd-pulse 0.8s ease-in-out infinite;
+}
+
+.la-cmd-pill.la-cmd-error {
+  background: #f38ba8;
+  box-shadow: 0 0 4px #f38ba8;
+}
+
+@keyframes la-cmd-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* ── Agent highlight overlay (DevTools-style) ─────────────────────────── */
+
+#la-highlight-overlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2147483646;
+}
+
+.la-hi-band {
+  position: fixed;
+  pointer-events: none;
+  box-sizing: border-box;
+}
+
+.la-hi-margin {
+  background: rgba(246, 178, 107, 0.30);
+}
+
+.la-hi-element {
+  background: rgba(111, 168, 220, 0.35);
+  outline: 2px solid #6fa8dc;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4) inset;
+}
+
+.la-hi-tip {
+  position: fixed;
+  background: #1e1e2e;
+  color: #cdd6f4;
+  padding: 3px 7px;
+  border-radius: 3px;
+  font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: nowrap;
+  pointer-events: none;
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  z-index: 2147483647;
+}
+
 #la-pick-btn {
   background: #313244;
   border: none;
@@ -656,6 +757,22 @@
   align-items: center;
   justify-content: space-between;
   padding: 4px 2px 8px;
+  gap: 8px;
+}
+
+.la-toolbar-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: #a6adc8;
+  cursor: pointer;
+  user-select: none;
+}
+
+.la-toolbar-toggle input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
 }
 
 .la-event-list {
@@ -706,11 +823,13 @@
   font-family: "SF Mono", "Fira Code", monospace;
 }
 
-.la-ev-event  { background: #3b1f5e; color: #cba6f7; }
-.la-ev-mount  { background: #1a3a2a; color: #a6e3a1; }
-.la-ev-params { background: #1a2a3f; color: #89b4fa; }
-.la-ev-info   { background: #2a2a3a; color: #a6adc8; }
-.la-ev-error  { background: #4a1a2a; color: #f38ba8; }
+.la-ev-event   { background: #3b1f5e; color: #cba6f7; }
+.la-ev-mount   { background: #1a3a2a; color: #a6e3a1; }
+.la-ev-params  { background: #1a2a3f; color: #89b4fa; }
+.la-ev-info    { background: #2a2a3a; color: #a6adc8; }
+.la-ev-error   { background: #4a1a2a; color: #f38ba8; }
+.la-ev-unknown { background: #2a2630; color: #9399b2; font-style: italic; }
+.la-ev-pending { background: #3a3020; color: #f9e2af; }
 
 .la-event-label {
   color: #7f849c;
@@ -778,6 +897,102 @@
   font-size: 11px;
   font-family: "SF Mono", "Fira Code", monospace;
   margin-bottom: 4px;
+}
+
+/* ── Timeline pane ──────────────────────────────────────────────────────────── */
+
+.la-tl-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px 0;
+}
+
+.la-tl-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.la-tl-group-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 4px 6px;
+  border-bottom: 1px solid #313244;
+  margin-bottom: 4px;
+}
+
+.la-tl-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.la-tl-row:hover {
+  background: #1e1e2e;
+}
+
+.la-tl-arrow {
+  color: #585b70;
+  font-size: 9px;
+  width: 10px;
+  flex-shrink: 0;
+}
+
+.la-tl-counts {
+  font-size: 11px;
+  margin-left: 4px;
+}
+
+.la-tl-body {
+  background: #11111b;
+  border: 1px solid #313244;
+  border-radius: 4px;
+  padding: 6px 8px;
+  margin: 2px 0 4px 18px;
+}
+
+/* ── Async pane ─────────────────────────────────────────────────────────────── */
+
+.la-async-section {
+  margin-top: 6px;
+}
+
+.la-async-pending {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 3px;
+}
+
+.la-async-pending:hover {
+  background: #1e1e2e;
+}
+
+.la-async-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.la-async-row:hover {
+  background: #1e1e2e;
+}
+
+.la-async-body {
+  background: #11111b;
+  border: 1px solid #313244;
+  border-radius: 4px;
+  padding: 6px 8px;
+  margin: 2px 0 4px 18px;
 }
 
 /* ── Picker highlight (applied via attribute) ───────────────────────────────── */
