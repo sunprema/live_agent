@@ -113,6 +113,14 @@ defmodule LiveAgent.MCP.Server do
     %{jsonrpc: "2.0", id: id, result: %{content: [%{type: "text", text: text}], isError: false}}
   end
 
+  defp tool_response(id, {:ok, {:image, base64}}) when is_binary(base64) do
+    %{
+      jsonrpc: "2.0",
+      id: id,
+      result: %{content: [%{type: "image", data: base64, mimeType: "image/png"}], isError: false}
+    }
+  end
+
   defp tool_response(id, {:error, :invalid_arguments}) do
     %{
       jsonrpc: "2.0",

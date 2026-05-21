@@ -353,6 +353,32 @@ defmodule LiveAgent.MCP.Tools do
         callback: &clear_highlight/1
       },
       %{
+        name: "take_screenshot",
+        description: """
+        Captures a screenshot of the user's browser and returns it as a PNG image.
+
+        Optionally pass a CSS selector to capture only that element (e.g. a specific
+        component, section, or panel). Without a selector, the full viewport is captured.
+        The LiveAgent panel UI is automatically excluded from the capture.
+
+        Use this to inspect layout, spacing, colours, and visual styling so you can
+        suggest or apply targeted CSS fixes.
+
+        Requires the LiveAgent panel to be open in a browser tab.
+        """,
+        inputSchema: %{
+          type: "object",
+          properties: %{
+            selector: %{
+              type: "string",
+              description: "CSS selector for the element to capture (optional; omit for full viewport)"
+            }
+          },
+          required: []
+        },
+        callback: &take_screenshot/1
+      },
+      %{
         name: "click",
         description: """
         Clicks an element in the user's browser by dispatching a real `click` event
@@ -533,6 +559,157 @@ defmodule LiveAgent.MCP.Tools do
           }
         },
         callback: &reset_watch/1
+      },
+      %{
+        name: "inject_css",
+        description: """
+        Injects a CSS rule block directly into the user's browser page without touching
+        any source files. Use this to prototype style fixes visually: inject the CSS,
+        call take_screenshot to confirm it looks right, then write the fix to the actual
+        stylesheet.
+
+        Optionally pass an `id` to label the injection so you can revert it by name later.
+        Calling inject_css with the same id overwrites the previous CSS for that id.
+
+        Requires the LiveAgent panel to be open in a browser tab.
+        """,
+        inputSchema: %{
+          type: "object",
+          required: ["css"],
+          properties: %{
+            css: %{type: "string", description: "CSS text to inject, e.g. \".hero { padding: 2rem; }\""},
+            id: %{type: "string", description: "Label for this injection (default: \"default\"). Use distinct ids to manage multiple injections independently."}
+          }
+        },
+        callback: &inject_css/1
+      },
+      %{
+        name: "revert_css",
+        description: """
+        Removes previously injected CSS from the browser page.
+
+        Pass `id` to remove a specific injection (must match the id used in inject_css).
+        Omit `id` to remove ALL injections at once.
+
+        Requires the LiveAgent panel to be open in a browser tab.
+        """,
+        inputSchema: %{
+          type: "object",
+          properties: %{
+            id: %{type: "string", description: "Label of the injection to remove (omit to remove all)"}
+          },
+          required: []
+        },
+        callback: &revert_css/1
+      },
+      %{
+        name: "scroll_to",
+        description: """
+        Scrolls the browser page to bring an element into view.
+
+        Use this before take_screenshot to capture content that is below the fold,
+        or to navigate to a specific section of a long page.
+
+        Requires the LiveAgent panel to be open in a browser tab.
+        """,
+        inputSchema: %{
+          type: "object",
+          required: ["selector"],
+          properties: %{
+            selector: %{type: "string", description: "CSS selector of the element to scroll to"},
+            behavior: %{type: "string", enum: ["smooth", "instant"], description: "Scroll animation (default: smooth)"}
+          }
+        },
+        callback: &scroll_to/1
+      },
+      %{
+        name: "send_event",
+        description: """
+        Directly fires a Phoenix LiveView `handle_event` callback on a running LiveView
+        process — no browser click needed. The LiveView re-renders and pushes the diff to
+        the connected client exactly as if the event came from the browser.
+
+        Use this to:
+          - Test event handlers in isolation
+          - Trigger state transitions without a UI interaction
+          - Verify how assigns change in response to a specific event
+
+        Returns the before/after assigns diff.
+        """,
+        inputSchema: %{
+          type: "object",
+          required: ["pid", "event"],
+          properties: %{
+            pid: %{type: "string", description: "PID string from list_live_views"},
+            event: %{type: "string", description: "The event name passed to handle_event/3"},
+            params: %{type: "object", description: "Params map passed to handle_event/3 (default: {})"}
+          }
+        },
+        callback: &send_event/1
+      },
+      %{
+        name: "get_computed_styles",
+        description: """
+        Returns the browser's computed CSS for an element — the final resolved values
+        after all stylesheets, inheritance, and cascade have been applied.
+
+        Pass a CSS `selector` to target an element. Optionally pass a `properties` list
+        to fetch only specific CSS properties (e.g. ["display", "padding", "color"]).
+        Without `properties`, all computed styles are returned (~300 properties).
+
+        Also returns the element's bounding rect (top, left, width, height) so you can
+        spot sizing and position issues in one call.
+
+        Use this instead of take_screenshot when you need exact values rather than a
+        visual — faster and precise for diagnosing spacing, font, colour, and layout bugs.
+
+        Requires the LiveAgent panel to be open in a browser tab.
+        """,
+        inputSchema: %{
+          type: "object",
+          required: ["selector"],
+          properties: %{
+            selector: %{type: "string", description: "CSS selector of the element to inspect"},
+            properties: %{
+              type: "array",
+              items: %{type: "string"},
+              description: "Specific CSS property names to return (e.g. [\"margin\", \"font-size\"]). Omit to return all."
+            }
+          }
+        },
+        callback: &get_computed_styles/1
+      },
+      %{
+        name: "get_errors",
+        description: """
+        Returns errors collected since the LiveAgent server started — both browser-side
+        JavaScript errors and server-side LiveView exceptions.
+
+        JS errors include: uncaught exceptions (`window.onerror`) and unhandled Promise
+        rejections. Server errors include: exceptions raised inside mount, handle_event,
+        handle_params, and LiveComponent handle_event.
+
+        Each error has a `source` field ("js" or "server"), a message or reason, a
+        stacktrace where available, the view/callback where it occurred, and a timestamp.
+
+        Call this after making a change to check whether anything broke silently.
+        Pass `since_id` to fetch only errors newer than a known id (use the `id` field
+        from the last response). Call `clear_errors` to reset the log.
+        """,
+        inputSchema: %{
+          type: "object",
+          properties: %{
+            since_id: %{type: "integer", description: "Return only errors with id greater than this (default: 0 = all)"}
+          },
+          required: []
+        },
+        callback: &get_errors/1
+      },
+      %{
+        name: "clear_errors",
+        description: "Clears the error log. Useful before making a change so subsequent get_errors calls only show new errors.",
+        inputSchema: %{type: "object", properties: %{}, required: []},
+        callback: &clear_errors/1
       }
     ]
   end
@@ -807,6 +984,234 @@ defmodule LiveAgent.MCP.Tools do
 
   defp reset_watch(_), do: {:error, :invalid_arguments}
 
+  # ── CSS injection ──────────────────────────────────────────────────────────
+
+  defp inject_css(%{"css" => css} = args) when is_binary(css) do
+    id = Map.get(args, "id", "default")
+    dispatch_browser_command("inject_css", %{css: css, id: id}, fn result ->
+      style_id = Map.get(result, "id", "la-css-#{id}")
+      len = Map.get(result, "length", 0)
+      "CSS injected (#{len} chars) as <style id=\"#{style_id}\">. Call revert_css to undo."
+    end)
+  end
+
+  defp inject_css(_), do: {:error, "inject_css requires 'css' (string)"}
+
+  defp revert_css(args) when is_map(args) do
+    id = Map.get(args, "id")
+    payload = if id, do: %{id: id}, else: %{}
+
+    dispatch_browser_command("revert_css", payload, fn result ->
+      removed = Map.get(result, "removed", 0)
+
+      if id do
+        "Removed injected CSS with id '#{id}' (#{removed} style element removed)."
+      else
+        "Removed all injected CSS (#{removed} style element(s) removed)."
+      end
+    end)
+  end
+
+  # ── Scroll ─────────────────────────────────────────────────────────────────
+
+  defp scroll_to(%{"selector" => selector} = args) when is_binary(selector) do
+    behavior = Map.get(args, "behavior", "smooth")
+    payload = %{selector: selector, behavior: behavior}
+
+    dispatch_browser_command("scroll_to", payload, fn result ->
+      rect = Map.get(result, "rect", %{})
+      "Scrolled to '#{selector}'. Element rect: #{inspect(rect)}."
+    end)
+  end
+
+  defp scroll_to(_), do: {:error, "scroll_to requires 'selector' (string)"}
+
+  # ── Computed styles ────────────────────────────────────────────────────────
+
+  defp get_computed_styles(%{"selector" => selector} = args) when is_binary(selector) do
+    properties = Map.get(args, "properties")
+    payload = %{selector: selector}
+    payload = if properties, do: Map.put(payload, :properties, properties), else: payload
+
+    dispatch_browser_command("get_computed_styles", payload, fn result ->
+      rect = Map.get(result, "rect", %{})
+      styles = Map.get(result, "styles", %{})
+
+      header = "Computed styles for '#{selector}' (#{map_size(styles)} properties)\n" <>
+               "Rect: #{Jason.encode!(rect)}\n\n"
+
+      body =
+        styles
+        |> Enum.sort_by(fn {k, _} -> k end)
+        |> Enum.map(fn {k, v} -> "  #{k}: #{v}" end)
+        |> Enum.join("\n")
+
+      header <> body
+    end)
+  end
+
+  defp get_computed_styles(_), do: {:error, "get_computed_styles requires 'selector' (string)"}
+
+  # ── Error watcher ──────────────────────────────────────────────────────────
+
+  defp get_errors(args) when is_map(args) do
+    since_id = Map.get(args, "since_id", 0)
+    errors = LiveAgent.ErrorStore.get_errors(since_id)
+
+    if Enum.empty?(errors) do
+      {:ok, "No errors recorded#{if since_id > 0, do: " since id #{since_id}", else: ""}."}
+    else
+      js_errors = Enum.filter(errors, &(&1.source == "js"))
+      server_errors = Enum.filter(errors, &(&1.source == "server"))
+
+      sections =
+        []
+        |> maybe_append_errors("JavaScript errors (#{length(js_errors)})", js_errors, &format_js_error/1)
+        |> maybe_append_errors("Server errors (#{length(server_errors)})", server_errors, &format_server_error/1)
+
+      header = "#{length(errors)} error(s) collected. Latest id: #{hd(errors).id}\n"
+      {:ok, header <> Enum.join(sections, "\n\n")}
+    end
+  end
+
+  defp clear_errors(_args) do
+    LiveAgent.ErrorStore.clear()
+    {:ok, "Error log cleared."}
+  end
+
+  defp maybe_append_errors(sections, _title, [], _formatter), do: sections
+
+  defp maybe_append_errors(sections, title, errors, formatter) do
+    body =
+      errors
+      |> Enum.map(formatter)
+      |> Enum.join("\n\n")
+
+    sections ++ ["── #{title} ──\n#{body}"]
+  end
+
+  defp format_js_error(e) do
+    loc =
+      [e.filename, e.lineno && "line #{e.lineno}", e.colno && "col #{e.colno}"]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join(", ")
+
+    lines = ["[id:#{e.id}] [#{e.type}] #{e.message}", "  at #{loc}", "  #{e.timestamp}"]
+    lines = if e.stack, do: lines ++ ["  #{String.slice(e.stack, 0, 400)}"], else: lines
+    Enum.join(lines, "\n")
+  end
+
+  defp format_server_error(e) do
+    lines = [
+      "[id:#{e.id}] [#{e.scope}.#{e.callback}] #{e.view}#{if e.event, do: " event=#{e.event}", else: ""}",
+      "  #{e.reason}",
+      "  #{e.timestamp}"
+    ]
+
+    lines = if e.stacktrace && e.stacktrace != "", do: lines ++ [e.stacktrace], else: lines
+    Enum.join(lines, "\n")
+  end
+
+  # ── Send event ─────────────────────────────────────────────────────────────
+
+  defp send_event(%{"pid" => pid_string, "event" => event} = args) when is_binary(event) do
+    params = Map.get(args, "params", %{})
+
+    with {:ok, pid} <- SocketInspector.parse_pid(pid_string),
+         {:ok, before_socket} <- SocketInspector.get_socket(pid) do
+      try do
+        view = before_socket.view
+
+        result =
+          GenServer.call(
+            pid,
+            {:run, fn socket -> view.handle_event(event, params, socket) end},
+            5_000
+          )
+
+        case result do
+          :ok ->
+            {:ok, after_socket} = SocketInspector.get_socket(pid)
+            diff = assigns_diff(before_socket, after_socket)
+            format_send_event_result(event, diff)
+
+          {:ok, reply} ->
+            {:ok, after_socket} = SocketInspector.get_socket(pid)
+            diff = assigns_diff(before_socket, after_socket)
+            format_send_event_result(event, diff, reply)
+
+          other ->
+            {:error, "Unexpected result from LiveView: #{inspect(other)}"}
+        end
+      catch
+        :exit, {:noproc, _} ->
+          {:error, "LiveView process no longer alive."}
+
+        :exit, {:timeout, _} ->
+          {:error, "LiveView did not respond within 5 seconds."}
+
+        kind, reason ->
+          {:error, "handle_event raised: #{Exception.format(kind, reason)}"}
+      end
+    else
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp send_event(_), do: {:error, "send_event requires 'pid' and 'event'"}
+
+  defp assigns_diff(before_socket, after_socket) do
+    before_assigns = SocketInspector.extract_assigns(before_socket)
+    after_assigns = SocketInspector.extract_assigns(after_socket)
+
+    changed =
+      after_assigns
+      |> Enum.filter(fn {k, v} -> Map.get(before_assigns, k) != v end)
+      |> Map.new()
+
+    removed =
+      before_assigns
+      |> Map.keys()
+      |> Enum.reject(&Map.has_key?(after_assigns, &1))
+
+    %{changed: changed, removed: removed}
+  end
+
+  defp format_send_event_result(event, diff, reply \\ nil) do
+    changed = Map.get(diff, :changed, %{})
+    removed = Map.get(diff, :removed, [])
+
+    lines = ["Event '#{event}' handled successfully."]
+
+    lines =
+      if reply, do: lines ++ ["Reply: #{Jason.encode!(reply)}"], else: lines
+
+    lines =
+      if map_size(changed) > 0 do
+        lines ++
+          ["", "Changed assigns:"] ++
+          Enum.map(changed, fn {k, v} -> "  #{k}: #{Jason.encode!(v)}" end)
+      else
+        lines
+      end
+
+    lines =
+      if length(removed) > 0 do
+        lines ++ ["", "Removed assigns: #{Enum.join(removed, ", ")}"]
+      else
+        lines
+      end
+
+    lines =
+      if map_size(changed) == 0 and length(removed) == 0 do
+        lines ++ ["No assign changes."]
+      else
+        lines
+      end
+
+    {:ok, Enum.join(lines, "\n")}
+  end
+
   defp get_selected_element(_args) do
     case LiveAgent.BrowserStateStore.get_selected_element() do
       nil ->
@@ -1011,6 +1416,28 @@ defmodule LiveAgent.MCP.Tools do
 
   defp clear_highlight(_args) do
     dispatch_browser_command("clear_highlight", %{}, fn _ -> "Highlight cleared." end)
+  end
+
+  defp take_screenshot(args) when is_map(args) do
+    payload =
+      case Map.get(args, "selector") do
+        nil -> %{}
+        sel -> %{selector: sel}
+      end
+
+    case LiveAgent.CommandQueue.enqueue_and_await("screenshot", payload, 30_000) do
+      {:ok, %{"ok" => true, "base64" => base64}} ->
+        {:ok, {:image, base64}}
+
+      {:ok, %{"ok" => false, "error" => err}} ->
+        {:error, "browser: " <> to_string(err)}
+
+      {:error, :timeout} ->
+        {:error, "No LiveAgent panel responded. Open the panel in a browser tab and try again."}
+
+      {:error, reason} ->
+        {:error, inspect(reason)}
+    end
   end
 
   defp click(args) when is_map(args) do

@@ -46,6 +46,53 @@
 
   window.__liveAgent = { state };
 
+  // ─── Error capture ────────────────────────────────────────────────────────
+  // Runs immediately on script load — before the panel is opened — so no errors
+  // are missed. Deduplicates bursts (same message within 500ms → dropped).
+
+  (function () {
+    let _lastMsg = null, _lastTs = 0;
+
+    function postError(payload) {
+      const now = Date.now();
+      if (payload.message === _lastMsg && now - _lastTs < 500) return;
+      _lastMsg = payload.message;
+      _lastTs = now;
+      payload.timestamp = new Date().toISOString();
+      fetch(BASE + "/api/errors", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+        keepalive: true,
+      }).catch(() => {});
+    }
+
+    const _origOnError = window.onerror;
+    window.onerror = function (message, filename, lineno, colno, error) {
+      postError({
+        type: "error",
+        message: String(message),
+        filename: filename || null,
+        lineno: lineno || null,
+        colno: colno || null,
+        stack: error && error.stack ? String(error.stack) : null,
+      });
+      return _origOnError ? _origOnError.apply(this, arguments) : false;
+    };
+
+    window.addEventListener("unhandledrejection", function (e) {
+      const reason = e.reason;
+      postError({
+        type: "unhandledrejection",
+        message: reason instanceof Error ? reason.message : String(reason),
+        stack: reason instanceof Error && reason.stack ? String(reason.stack) : null,
+        filename: null,
+        lineno: null,
+        colno: null,
+      });
+    });
+  })();
+
   // ─── Element Picker ────────────────────────────────────────────────────────
 
   function startPicker() {
@@ -355,6 +402,11 @@
     fill: cmdFill,
     submit: cmdSubmit,
     wait_for: cmdWaitFor,
+    screenshot: cmdScreenshot,
+    inject_css: cmdInjectCss,
+    revert_css: cmdRevertCss,
+    scroll_to: cmdScrollTo,
+    get_computed_styles: cmdGetComputedStyles,
   };
 
   // Ops that mutate the page; gated behind the Drive toggle.
@@ -828,6 +880,89 @@
       view_after: currentMainView(),
       flash: captureFlash(),
     }));
+  }
+
+  // ─── Screenshot ───────────────────────────────────────────────────────────
+
+  async function cmdScreenshot({ selector } = {}) {
+    if (!window.html2canvas) {
+      await new Promise((resolve, reject) => {
+        const s = document.createElement("script");
+        s.src = "https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js";
+        s.onload = resolve;
+        s.onerror = () => reject(new Error("Failed to load html2canvas"));
+        document.head.appendChild(s);
+      });
+    }
+    const target = selector ? document.querySelector(selector) : document.documentElement;
+    if (!target) throw new Error("No element found for selector: " + selector);
+    const canvas = await window.html2canvas(target, {
+      useCORS: true,
+      allowTaint: true,
+      logging: false,
+      ignoreElements: (el) => el.id === "la-root",
+    });
+    const dataUrl = canvas.toDataURL("image/png");
+    const base64 = dataUrl.replace(/^data:image\/png;base64,/, "");
+    return { ok: true, base64, width: canvas.width, height: canvas.height };
+  }
+
+  // ─── CSS injection ────────────────────────────────────────────────────────
+
+  function cmdInjectCss({ id, css } = {}) {
+    if (!css) throw new Error("inject_css requires 'css'");
+    const styleId = "la-css-" + (id || "default");
+    let el = document.getElementById(styleId);
+    if (!el) {
+      el = document.createElement("style");
+      el.id = styleId;
+      document.head.appendChild(el);
+    }
+    el.textContent = css;
+    return { ok: true, id: styleId, length: css.length };
+  }
+
+  function cmdRevertCss({ id } = {}) {
+    if (id) {
+      const el = document.getElementById("la-css-" + id);
+      if (el) el.remove();
+      return { ok: true, removed: el ? 1 : 0 };
+    }
+    const all = [...document.querySelectorAll("[id^='la-css-']")];
+    all.forEach((el) => el.remove());
+    return { ok: true, removed: all.length };
+  }
+
+  // ─── Computed styles ──────────────────────────────────────────────────────
+
+  function cmdGetComputedStyles({ selector, properties } = {}) {
+    const target = selector ? document.querySelector(selector) : document.documentElement;
+    if (!target) throw new Error("No element found for selector: " + selector);
+    const computed = window.getComputedStyle(target);
+    const r = target.getBoundingClientRect();
+    const rect = { top: Math.round(r.top), left: Math.round(r.left), width: Math.round(r.width), height: Math.round(r.height) };
+
+    let styles = {};
+    if (properties && properties.length > 0) {
+      for (const prop of properties) {
+        styles[prop] = computed.getPropertyValue(prop);
+      }
+    } else {
+      for (let i = 0; i < computed.length; i++) {
+        styles[computed[i]] = computed.getPropertyValue(computed[i]);
+      }
+    }
+    return { ok: true, selector: selector || null, rect, styles };
+  }
+
+  // ─── Scroll ───────────────────────────────────────────────────────────────
+
+  function cmdScrollTo({ selector, behavior = "smooth" } = {}) {
+    const target = selector ? document.querySelector(selector) : document.documentElement;
+    if (!target) throw new Error("No element found for selector: " + selector);
+    target.scrollIntoView({ behavior, block: "center" });
+    const r = target.getBoundingClientRect();
+    return { ok: true, selector: selector || null, rect: { top: Math.round(r.top), left: Math.round(r.left), width: Math.round(r.width), height: Math.round(r.height) } };
   }
 
   function runCommandOp(cmd) {
@@ -1304,8 +1439,9 @@
         return `<div class="la-card">
           <div class="la-card-header">
             <button class="la-expand-btn" data-pid="${escHtml(v.pid_string)}">${expanded ? "\u25BC" : "\u25B6"}</button>
-            <span class="la-view-name">${escHtml(shortName(v.view))}</span>
+            ${v.url ? `<a class="la-view-name la-view-link" href="${escHtml(v.url)}">${escHtml(shortName(v.view))}</a>` : `<span class="la-view-name">${escHtml(shortName(v.view))}</span>`}
             <span class="la-badge ${v.connected ? "la-green" : "la-gray"}">${v.connected ? "live" : "static"}</span>
+            ${v.url ? `<a class="la-nav-btn" href="${escHtml(v.url)}" title="Navigate to ${escHtml(v.url)}">\u2192</a>` : ""}
           </div>
           <div class="la-meta">
             <span class="la-pid">${escHtml(v.pid_string)}</span>

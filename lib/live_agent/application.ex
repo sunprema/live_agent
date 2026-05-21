@@ -10,7 +10,8 @@ defmodule LiveAgent.Application do
       LiveAgent.AsyncInspector,
       LiveAgent.ComponentTreeStore,
       LiveAgent.WatchStore,
-      LiveAgent.CommandQueue
+      LiveAgent.CommandQueue,
+      LiveAgent.ErrorStore
     ]
     Supervisor.start_link(children, strategy: :one_for_one, name: LiveAgent.Supervisor)
   end

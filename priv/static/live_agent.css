@@ -364,6 +364,31 @@
   white-space: nowrap;
 }
 
+a.la-view-link {
+  text-decoration: none;
+  cursor: pointer;
+}
+a.la-view-link:hover {
+  color: #89b4fa;
+  text-decoration: underline;
+}
+
+.la-nav-btn {
+  padding: 1px 7px;
+  border-radius: 3px;
+  background: #89b4fa;
+  color: #1e1e2e;
+  font-size: 11px;
+  font-weight: bold;
+  text-decoration: none;
+  opacity: 0.7;
+  flex-shrink: 0;
+  transition: opacity 0.15s;
+}
+.la-nav-btn:hover {
+  opacity: 1;
+}
+
 /* ── Badges ─────────────────────────────────────────────────────────────────── */
 
 .la-badge {

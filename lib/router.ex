@@ -218,6 +218,28 @@ defmodule LiveAgent.Router do
     |> halt()
   end
 
+  post "/api/errors" do
+    opts = Plug.Parsers.init(parsers: [:json], pass: [], json_decoder: Jason)
+    conn = Plug.Parsers.call(conn, opts)
+    LiveAgent.ErrorStore.push_js_error(conn.body_params)
+
+    conn
+    |> put_resp_header("content-type", "application/json")
+    |> send_resp(200, "{\"ok\":true}")
+    |> halt()
+  end
+
+  get "/api/errors" do
+    conn = fetch_query_params(conn)
+    since_id = conn.query_params |> Map.get("since", "0") |> String.to_integer()
+    errors = LiveAgent.ErrorStore.get_errors(since_id)
+
+    conn
+    |> put_resp_header("content-type", "application/json")
+    |> send_resp(200, Jason.encode!(errors))
+    |> halt()
+  end
+
   get "/api/events" do
     conn = fetch_query_params(conn)
     since_id = conn.query_params |> Map.get("since", "0") |> String.to_integer()
