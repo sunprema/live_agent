@@ -1316,12 +1316,32 @@
   // ─── Panel Controls ────────────────────────────────────────────────────────
 
   let tallMode = false;
+  // Saved value of body's inline padding-bottom before we offset the page to
+  // make room for the fixed panel. `null` means "not currently offset".
+  let _savedBodyPaddingBottom = null;
+
+  function applyBodyOffset() {
+    if (_savedBodyPaddingBottom === null) {
+      _savedBodyPaddingBottom = document.body.style.paddingBottom || "";
+    }
+    const panel = document.getElementById("la-panel");
+    const height = panel ? panel.offsetHeight : tallMode ? 520 : 300;
+    document.body.style.paddingBottom = height + "px";
+  }
+
+  function clearBodyOffset() {
+    if (_savedBodyPaddingBottom !== null) {
+      document.body.style.paddingBottom = _savedBodyPaddingBottom;
+      _savedBodyPaddingBottom = null;
+    }
+  }
 
   function openPanel() {
     state.visible = true;
     document.getElementById("la-panel").style.display = "flex";
     document.getElementById("la-toggle").style.display = "none";
     rebuildSplit();
+    applyBodyOffset();
     fetchLiveViews();
     state._pollTimer = setInterval(fetchLiveViews, 3000);
     startCommandLoop();
@@ -1332,6 +1352,7 @@
     state.visible = false;
     document.getElementById("la-panel").style.display = "none";
     document.getElementById("la-toggle").style.display = "";
+    clearBodyOffset();
     clearInterval(state._pollTimer);
     clearInterval(state._eventsTimer);
     state._eventsTimer = null;
@@ -1344,6 +1365,7 @@
     tallMode = !tallMode;
     const panel = document.getElementById("la-panel");
     panel.style.height = tallMode ? "520px" : "300px";
+    applyBodyOffset();
   }
 
   function togglePicker() {
