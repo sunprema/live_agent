@@ -399,9 +399,10 @@ For "what's loading right now" and "what async work just finished":
 | --------------------- | ------- | --------------------------------------------------------------- |
 | `allow_remote_access` | `false` | Allow connections from non-localhost IPs. Leave `false` in dev. |
 | `drive_default`       | `false` | Default for the **Drive** toggle on first visit (no localStorage entry yet). Once the user flips the toggle, their stored preference wins. |
+| `open_default`        | `false` | If `true`, the panel auto-opens on page load instead of starting collapsed behind the floating **⚡ LA** button. Persisted per browser — once the user closes the panel, that choice is remembered. |
 
 ```elixir
-plug LiveAgent, allow_remote_access: false, drive_default: true
+plug LiveAgent, allow_remote_access: false, drive_default: true, open_default: true
 ```
 
 ---

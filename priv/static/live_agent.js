@@ -41,15 +41,25 @@
   const SCREENSHOT_HISTORY_LIMIT = 12;
 
   try {
-    const stored = localStorage.getItem("la-drive-enabled");
-    if (stored === null) {
+    const root = document.getElementById("la-root");
+    const storedDrive = localStorage.getItem("la-drive-enabled");
+    if (storedDrive === null) {
       // No user preference yet — fall back to the server-configured default
       // (set via `plug LiveAgent, drive_default: true`).
-      const root = document.getElementById("la-root");
       state.driveEnabled = root && root.dataset.driveDefault === "1";
     } else {
-      state.driveEnabled = stored === "1";
+      state.driveEnabled = storedDrive === "1";
     }
+
+    const storedOpen = localStorage.getItem("la-panel-open");
+    if (storedOpen === null) {
+      // Likewise for the panel's open-by-default behavior
+      // (set via `plug LiveAgent, open_default: true`).
+      state.openByDefault = !!(root && root.dataset.openDefault === "1");
+    } else {
+      state.openByDefault = storedOpen === "1";
+    }
+
     state.hideUnknownTimeline = localStorage.getItem("la-hide-unknown-timeline") === "1";
   } catch (_) {
     // localStorage can throw in sandboxed contexts; default to off.
@@ -1282,6 +1292,8 @@
       fetchLiveViews();
       state._pollTimer = setInterval(fetchLiveViews, 3000);
       startCommandLoop();
+    } else if (state.openByDefault) {
+      openPanel();
     }
   }
 
@@ -1297,6 +1309,7 @@
     fetchLiveViews();
     state._pollTimer = setInterval(fetchLiveViews, 3000);
     startCommandLoop();
+    try { localStorage.setItem("la-panel-open", "1"); } catch (_) {}
   }
 
   function closePanel() {
@@ -1308,6 +1321,7 @@
     state._eventsTimer = null;
     stopCommandLoop();
     if (state.pickerActive) stopPicker();
+    try { localStorage.setItem("la-panel-open", "0"); } catch (_) {}
   }
 
   function toggleHeight() {

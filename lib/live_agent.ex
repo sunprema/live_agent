@@ -6,7 +6,8 @@ defmodule LiveAgent do
   def init(opts) do
     %{
       allow_remote_access: Keyword.get(opts, :allow_remote_access, false),
-      drive_default: Keyword.get(opts, :drive_default, false)
+      drive_default: Keyword.get(opts, :drive_default, false),
+      open_default: Keyword.get(opts, :open_default, false)
     }
   end
 
@@ -35,10 +36,11 @@ defmodule LiveAgent do
 
   defp inject_panel(conn, config) do
     drive_default = if config[:drive_default], do: "1", else: "0"
+    open_default = if config[:open_default], do: "1", else: "0"
 
     snippet = """
     <link rel="stylesheet" href="/live_agent/css">
-    <div id="la-root" data-drive-default="#{drive_default}"></div>
+    <div id="la-root" data-drive-default="#{drive_default}" data-open-default="#{open_default}"></div>
     <script src="/live_agent/js"></script>
     """
 
