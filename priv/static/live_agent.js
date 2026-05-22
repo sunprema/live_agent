@@ -905,13 +905,19 @@
 
   // ─── Screenshot ───────────────────────────────────────────────────────────
   //
-  // html2canvas v1.4.1 doesn't parse modern color functions (oklch/oklab).
-  // Tailwind v4 and DaisyUI emit oklch() everywhere, which throws during
-  // capture. Before invoking html2canvas, we walk all same-origin stylesheets
-  // and rewrite any property whose value contains oklch()/oklab() to its sRGB
-  // equivalent. Originals are restored in finally{} so the user's UI is
-  // unaffected. CSS variables get patched at their definition site, so
-  // dependent rules recompute automatically.
+  // Primary fix: html2canvas-pro is the maintained fork of html2canvas with
+  // native support for oklch/oklab/lch/lab/color() — modern Tailwind v4 and
+  // DaisyUI builds emit oklch() everywhere, and the original html2canvas
+  // v1.4.1 dies with "unsupported color function" on them.
+  //
+  // Belt-and-suspenders: before invoking the lib, we still walk same-origin
+  // stylesheets (including @media/@supports/@layer and adoptedStyleSheets)
+  // and rewrite oklch()/oklab() to their sRGB equivalents. This uses
+  // style.cssText (which always contains custom properties like
+  // --color-primary, regardless of how style[i] enumeration behaves in the
+  // browser) so DaisyUI's --color-* palette gets patched at its definition
+  // site, and downstream var(--color-*) lookups recompute to rgb for free.
+  // Originals are restored in finally{}.
 
   function oklabToSrgbString(L, a, b, A) {
     const l_ = L + 0.3963377774 * a + 0.2158037573 * b;
@@ -1045,20 +1051,26 @@
       for (const rule of rules) {
         if (rule.cssRules) visit(rule.cssRules); // @media, @supports, @layer
         const style = rule.style;
-        if (!style || style.length === 0) continue;
-        for (let i = 0; i < style.length; i++) {
-          const prop = style[i];
-          const val = style.getPropertyValue(prop);
-          if (!val || (!val.includes("oklch(") && !val.includes("oklab("))) continue;
-          const replaced = replaceModernColors(val);
-          if (!replaced) continue;
-          const priority = style.getPropertyPriority(prop);
-          patches.push({ style, prop, original: val, priority });
-          style.setProperty(prop, replaced, priority);
+        if (!style) continue;
+        const text = style.cssText;
+        if (!text || (!text.includes("oklch(") && !text.includes("oklab("))) continue;
+        const replaced = replaceModernColors(text);
+        if (!replaced || replaced === text) continue;
+        patches.push({ style, original: text });
+        try {
+          style.cssText = replaced;
+        } catch (_) {
+          // Browser rejected the patched text — drop the patch entry so we
+          // don't try to revert a write that never happened.
+          patches.pop();
         }
       }
     };
-    for (const sheet of document.styleSheets) {
+    const sheets = [
+      ...document.styleSheets,
+      ...(document.adoptedStyleSheets || []),
+    ];
+    for (const sheet of sheets) {
       let rules = null;
       try { rules = sheet.cssRules; } catch (_) { continue; } // CORS-blocked
       visit(rules);
@@ -1067,18 +1079,22 @@
   }
 
   function revertStylesheetPatches(patches) {
-    for (const { style, prop, original, priority } of patches) {
-      try { style.setProperty(prop, original, priority); } catch (_) {}
+    for (const { style, original } of patches) {
+      try { style.cssText = original; } catch (_) {}
     }
   }
 
   async function cmdScreenshot({ selector } = {}) {
+    // html2canvas-pro exposes the same window.html2canvas global as the
+    // original lib, so existing callsites keep working. If the user already
+    // loaded a non-pro build, we leave it alone — the patcher above is the
+    // safety net for that case.
     if (!window.html2canvas) {
       await new Promise((resolve, reject) => {
         const s = document.createElement("script");
-        s.src = "https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js";
+        s.src = "https://cdn.jsdelivr.net/npm/html2canvas-pro@1.5.10/dist/html2canvas-pro.min.js";
         s.onload = resolve;
-        s.onerror = () => reject(new Error("Failed to load html2canvas"));
+        s.onerror = () => reject(new Error("Failed to load html2canvas-pro"));
         document.head.appendChild(s);
       });
     }

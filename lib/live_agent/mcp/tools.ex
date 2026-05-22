@@ -355,7 +355,9 @@ defmodule LiveAgent.MCP.Tools do
       %{
         name: "take_screenshot",
         description: """
-        Captures a screenshot of the user's browser and returns it as a PNG image.
+        Captures a screenshot of the user's browser and saves it as a PNG to /tmp.
+        Returns the file path (e.g. "Screenshot saved to /tmp/live_agent_screenshot_20260522T143055Z.png (1920×1080)").
+        Use the Read tool on that path to view the image.
 
         Optionally pass a CSS selector to capture only that element (e.g. a specific
         component, section, or panel). Without a selector, the full viewport is captured.
@@ -1426,9 +1428,14 @@ defmodule LiveAgent.MCP.Tools do
       end
 
     case LiveAgent.CommandQueue.enqueue_and_await("screenshot", payload, 30_000) do
-      {:ok, %{"ok" => true, "base64" => base64}} ->
-        save_screenshot_to_tmp(base64)
-        {:ok, {:image, base64}}
+      {:ok, %{"ok" => true, "base64" => base64} = result} ->
+        case save_screenshot_to_tmp(base64) do
+          {:ok, path} ->
+            {:ok, format_screenshot_text(path, result)}
+
+          {:error, reason} ->
+            {:error, "failed to save screenshot: #{inspect(reason)}"}
+        end
 
       {:ok, %{"ok" => false, "error" => err}} ->
         {:error, "browser: " <> to_string(err)}
@@ -1441,28 +1448,49 @@ defmodule LiveAgent.MCP.Tools do
     end
   end
 
+  defp format_screenshot_text(path, result) do
+    w = Map.get(result, "width")
+    h = Map.get(result, "height")
+    dims = if w && h, do: " (#{w}×#{h})", else: ""
+    "Screenshot saved to #{path}#{dims}"
+  end
+
+  # /tmp is hardcoded on purpose — System.tmp_dir!() returns the user-scoped
+  # /var/folders/.../T/ on macOS, which is confusing when you're told the file
+  # is "in /tmp". On Linux this is identical to System.tmp_dir!() anyway.
+  @screenshot_dir "/tmp"
+
   defp save_screenshot_to_tmp(base64) do
-    with {:ok, bytes} <- Base.decode64(base64) do
-      ts =
-        DateTime.utc_now()
-        |> DateTime.to_iso8601(:basic)
-        |> String.replace(~r/[^0-9TZ]/, "")
+    require Logger
 
-      path = Path.join(System.tmp_dir!(), "live_agent_screenshot_#{ts}.png")
+    case Base.decode64(base64) do
+      {:ok, bytes} ->
+        ts =
+          DateTime.utc_now()
+          |> DateTime.to_iso8601(:basic)
+          |> String.replace(~r/[^0-9TZ]/, "")
 
-      case File.write(path, bytes) do
-        :ok ->
-          require Logger
-          Logger.info("[LiveAgent] screenshot saved: #{path}")
-          {:ok, path}
+        path = Path.join(@screenshot_dir, "live_agent_screenshot_#{ts}.png")
 
-        {:error, reason} ->
-          require Logger
-          Logger.warning("[LiveAgent] failed to save screenshot: #{inspect(reason)}")
-          {:error, reason}
-      end
-    else
-      :error -> {:error, :invalid_base64}
+        case File.write(path, bytes) do
+          :ok ->
+            Logger.info("[LiveAgent] screenshot saved: #{path}")
+            {:ok, path}
+
+          {:error, reason} ->
+            Logger.warning(
+              "[LiveAgent] failed to save screenshot to #{path}: #{inspect(reason)}"
+            )
+
+            {:error, reason}
+        end
+
+      :error ->
+        Logger.warning(
+          "[LiveAgent] screenshot base64 decode failed (length=#{byte_size(base64)})"
+        )
+
+        {:error, :invalid_base64}
     end
   end
 

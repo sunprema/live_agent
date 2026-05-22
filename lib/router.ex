@@ -341,8 +341,18 @@ defmodule LiveAgent.Router do
   end
 
   # Agent control: panel reports the result of an executed command.
+  # length: 50MB — screenshot results carry base64 PNGs that exceed the 8MB
+  # default for a full 4K capture, which would truncate the JSON body and
+  # surface as "Invalid Base64" at the MCP layer.
   post "/api/commands/result" do
-    opts = Plug.Parsers.init(parsers: [:json], pass: [], json_decoder: Jason)
+    opts =
+      Plug.Parsers.init(
+        parsers: [:json],
+        pass: [],
+        json_decoder: Jason,
+        length: 50_000_000
+      )
+
     conn = Plug.Parsers.call(conn, opts)
 
     with {:ok, id} <- fetch_command_id(conn.body_params),
