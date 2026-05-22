@@ -113,7 +113,9 @@ you can see and stop anything Claude does.
 **Drive toggle** — next to the status dot. `highlight_element` works regardless
 (read-only), but `click`, `navigate`, `fill`, and `submit` refuse to run unless
 Drive is ON. The toggle's state is remembered per browser (localStorage), so
-turning it off is a hard stop you can leave in place.
+turning it off is a hard stop you can leave in place. The initial default for
+new browsers can be set with the `drive_default: true` plug option (see
+[Options](#options)) — localStorage still wins once you flip the toggle.
 
 #### Demo scripts
 
@@ -393,9 +395,10 @@ For "what's loading right now" and "what async work just finished":
 | Option                | Default | Description                                                     |
 | --------------------- | ------- | --------------------------------------------------------------- |
 | `allow_remote_access` | `false` | Allow connections from non-localhost IPs. Leave `false` in dev. |
+| `drive_default`       | `false` | Default for the **Drive** toggle on first visit (no localStorage entry yet). Once the user flips the toggle, their stored preference wins. |
 
 ```elixir
-plug LiveAgent, allow_remote_access: false
+plug LiveAgent, allow_remote_access: false, drive_default: true
 ```
 
 ---

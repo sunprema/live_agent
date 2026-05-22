@@ -38,7 +38,15 @@
   };
 
   try {
-    state.driveEnabled = localStorage.getItem("la-drive-enabled") === "1";
+    const stored = localStorage.getItem("la-drive-enabled");
+    if (stored === null) {
+      // No user preference yet — fall back to the server-configured default
+      // (set via `plug LiveAgent, drive_default: true`).
+      const root = document.getElementById("la-root");
+      state.driveEnabled = root && root.dataset.driveDefault === "1";
+    } else {
+      state.driveEnabled = stored === "1";
+    }
     state.hideUnknownTimeline = localStorage.getItem("la-hide-unknown-timeline") === "1";
   } catch (_) {
     // localStorage can throw in sandboxed contexts; default to off.
@@ -919,7 +927,7 @@
       document.head.appendChild(el);
     }
     el.textContent = css;
-    return { ok: true, id: styleId, length: css.length };
+    return { ok: true, style_id: styleId, length: css.length };
   }
 
   function cmdRevertCss({ id } = {}) {
@@ -979,10 +987,11 @@
   }
 
   function postCommandResult(id, body) {
+    // `id` last so a result field named `id` can't clobber the correlation id.
     return fetch(BASE + "/api/commands/result", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ id, ...body }),
+      body: JSON.stringify({ ...body, id }),
     });
   }
 

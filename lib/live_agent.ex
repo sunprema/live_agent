@@ -5,7 +5,8 @@ defmodule LiveAgent do
   @impl true
   def init(opts) do
     %{
-      allow_remote_access: Keyword.get(opts, :allow_remote_access, false)
+      allow_remote_access: Keyword.get(opts, :allow_remote_access, false),
+      drive_default: Keyword.get(opts, :drive_default, false)
     }
   end
 
@@ -17,12 +18,12 @@ defmodule LiveAgent do
     |> Plug.Conn.halt()
   end
 
-  def call(conn, _opts) do
+  def call(conn, config) do
     Plug.Conn.register_before_send(conn, fn conn ->
       content_type = Plug.Conn.get_resp_header(conn, "content-type")
 
       if conn.status == 200 and html_response?(content_type) do
-        inject_panel(conn)
+        inject_panel(conn, config)
       else
         conn
       end
@@ -32,10 +33,12 @@ defmodule LiveAgent do
   defp html_response?(types),
     do: Enum.any?(types, &String.contains?(&1, "text/html"))
 
-  defp inject_panel(conn) do
+  defp inject_panel(conn, config) do
+    drive_default = if config[:drive_default], do: "1", else: "0"
+
     snippet = """
     <link rel="stylesheet" href="/live_agent/css">
-    <div id="la-root"></div>
+    <div id="la-root" data-drive-default="#{drive_default}"></div>
     <script src="/live_agent/js"></script>
     """
 
