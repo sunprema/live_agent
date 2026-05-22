@@ -1427,6 +1427,7 @@ defmodule LiveAgent.MCP.Tools do
 
     case LiveAgent.CommandQueue.enqueue_and_await("screenshot", payload, 30_000) do
       {:ok, %{"ok" => true, "base64" => base64}} ->
+        save_screenshot_to_tmp(base64)
         {:ok, {:image, base64}}
 
       {:ok, %{"ok" => false, "error" => err}} ->
@@ -1437,6 +1438,31 @@ defmodule LiveAgent.MCP.Tools do
 
       {:error, reason} ->
         {:error, inspect(reason)}
+    end
+  end
+
+  defp save_screenshot_to_tmp(base64) do
+    with {:ok, bytes} <- Base.decode64(base64) do
+      ts =
+        DateTime.utc_now()
+        |> DateTime.to_iso8601(:basic)
+        |> String.replace(~r/[^0-9TZ]/, "")
+
+      path = Path.join(System.tmp_dir!(), "live_agent_screenshot_#{ts}.png")
+
+      case File.write(path, bytes) do
+        :ok ->
+          require Logger
+          Logger.info("[LiveAgent] screenshot saved: #{path}")
+          {:ok, path}
+
+        {:error, reason} ->
+          require Logger
+          Logger.warning("[LiveAgent] failed to save screenshot: #{inspect(reason)}")
+          {:error, reason}
+      end
+    else
+      :error -> {:error, :invalid_base64}
     end
   end
 

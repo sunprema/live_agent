@@ -35,7 +35,10 @@
     _commandStatus: "idle", // "idle" | "connected" | "executing" | "error"
     driveEnabled: false,
     hideUnknownTimeline: false,
+    screenshots: [], // {id, ts, dataUrl, width, height, selector}
   };
+
+  const SCREENSHOT_HISTORY_LIMIT = 12;
 
   try {
     const stored = localStorage.getItem("la-drive-enabled");
@@ -891,6 +894,173 @@
   }
 
   // ─── Screenshot ───────────────────────────────────────────────────────────
+  //
+  // html2canvas v1.4.1 doesn't parse modern color functions (oklch/oklab).
+  // Tailwind v4 and DaisyUI emit oklch() everywhere, which throws during
+  // capture. Before invoking html2canvas, we walk all same-origin stylesheets
+  // and rewrite any property whose value contains oklch()/oklab() to its sRGB
+  // equivalent. Originals are restored in finally{} so the user's UI is
+  // unaffected. CSS variables get patched at their definition site, so
+  // dependent rules recompute automatically.
+
+  function oklabToSrgbString(L, a, b, A) {
+    const l_ = L + 0.3963377774 * a + 0.2158037573 * b;
+    const m_ = L - 0.1055613458 * a - 0.0638541728 * b;
+    const s_ = L - 0.0894841775 * a - 1.2914855480 * b;
+    const ll = l_ ** 3, mm = m_ ** 3, ss = s_ ** 3;
+    const lr = 4.0767416621 * ll - 3.3077115913 * mm + 0.2309699292 * ss;
+    const lg = -1.2684380046 * ll + 2.6097574011 * mm - 0.3413193965 * ss;
+    const lb = -0.0041960863 * ll - 0.7034186147 * mm + 1.7076147010 * ss;
+    const toSrgb = (c) => {
+      c = Math.max(0, Math.min(1, c));
+      const v = c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055;
+      return Math.round(v * 255);
+    };
+    const r = toSrgb(lr), g = toSrgb(lg), bb = toSrgb(lb);
+    if (A >= 1) return `rgb(${r}, ${g}, ${bb})`;
+    return `rgba(${r}, ${g}, ${bb}, ${Number(A.toFixed(3))})`;
+  }
+
+  function parseNum01(s, fallback = 0) {
+    if (!s || s === "none") return fallback;
+    if (s.endsWith("%")) return parseFloat(s) / 100;
+    const n = parseFloat(s);
+    return Number.isFinite(n) ? n : fallback;
+  }
+
+  function parseChroma(s) {
+    if (!s || s === "none") return 0;
+    if (s.endsWith("%")) return (parseFloat(s) / 100) * 0.4;
+    const n = parseFloat(s);
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  function parseAxis(s) {
+    if (!s || s === "none") return 0;
+    if (s.endsWith("%")) return (parseFloat(s) / 100) * 0.4;
+    const n = parseFloat(s);
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  function parseHueDeg(s) {
+    if (!s || s === "none") return 0;
+    if (s.endsWith("deg")) return parseFloat(s);
+    if (s.endsWith("rad")) return (parseFloat(s) * 180) / Math.PI;
+    if (s.endsWith("turn")) return parseFloat(s) * 360;
+    if (s.endsWith("grad")) return parseFloat(s) * 0.9;
+    return parseFloat(s) || 0;
+  }
+
+  function parseAlphaStr(s) {
+    if (!s || s === "none") return 1;
+    if (s.endsWith("%")) return parseFloat(s) / 100;
+    const n = parseFloat(s);
+    return Number.isFinite(n) ? n : 1;
+  }
+
+  function convertOklchToken(segment) {
+    // segment looks like "oklch(L C H)" or "oklch(L C H / A)"
+    const open = segment.indexOf("(");
+    const inner = segment.slice(open + 1, segment.length - 1);
+    const [coordsRaw, alphaRaw] = inner.split("/");
+    const parts = coordsRaw.trim().split(/\s+/);
+    if (parts.length < 3) return null;
+    const L = parseNum01(parts[0]);
+    const C = parseChroma(parts[1]);
+    const H = parseHueDeg(parts[2]);
+    const A = alphaRaw !== undefined ? parseAlphaStr(alphaRaw.trim()) : 1;
+    const a = C * Math.cos((H * Math.PI) / 180);
+    const b = C * Math.sin((H * Math.PI) / 180);
+    return oklabToSrgbString(L, a, b, A);
+  }
+
+  function convertOklabToken(segment) {
+    const open = segment.indexOf("(");
+    const inner = segment.slice(open + 1, segment.length - 1);
+    const [coordsRaw, alphaRaw] = inner.split("/");
+    const parts = coordsRaw.trim().split(/\s+/);
+    if (parts.length < 3) return null;
+    const L = parseNum01(parts[0]);
+    const a = parseAxis(parts[1]);
+    const b = parseAxis(parts[2]);
+    const A = alphaRaw !== undefined ? parseAlphaStr(alphaRaw.trim()) : 1;
+    return oklabToSrgbString(L, a, b, A);
+  }
+
+  function replaceModernColors(val) {
+    if (!val || (!val.includes("oklch(") && !val.includes("oklab("))) return null;
+    let out = "";
+    let i = 0;
+    let changed = false;
+    while (i < val.length) {
+      const oklchIdx = val.indexOf("oklch(", i);
+      const oklabIdx = val.indexOf("oklab(", i);
+      let start = -1;
+      let fn = null;
+      if (oklchIdx !== -1 && (oklabIdx === -1 || oklchIdx < oklabIdx)) {
+        start = oklchIdx;
+        fn = "oklch";
+      } else if (oklabIdx !== -1) {
+        start = oklabIdx;
+        fn = "oklab";
+      }
+      if (start === -1) {
+        out += val.slice(i);
+        break;
+      }
+      out += val.slice(i, start);
+      // Walk to matching close paren (handles one level of nesting like calc()).
+      let depth = 0;
+      let j = start + fn.length; // points at "("
+      for (; j < val.length; j++) {
+        const ch = val[j];
+        if (ch === "(") depth++;
+        else if (ch === ")") {
+          depth--;
+          if (depth === 0) { j++; break; }
+        }
+      }
+      const segment = val.slice(start, j);
+      const rgb = fn === "oklch" ? convertOklchToken(segment) : convertOklabToken(segment);
+      if (rgb) { out += rgb; changed = true; } else out += segment;
+      i = j;
+    }
+    return changed ? out : null;
+  }
+
+  function patchStylesheetsForCapture() {
+    const patches = [];
+    const visit = (rules) => {
+      if (!rules) return;
+      for (const rule of rules) {
+        if (rule.cssRules) visit(rule.cssRules); // @media, @supports, @layer
+        const style = rule.style;
+        if (!style || style.length === 0) continue;
+        for (let i = 0; i < style.length; i++) {
+          const prop = style[i];
+          const val = style.getPropertyValue(prop);
+          if (!val || (!val.includes("oklch(") && !val.includes("oklab("))) continue;
+          const replaced = replaceModernColors(val);
+          if (!replaced) continue;
+          const priority = style.getPropertyPriority(prop);
+          patches.push({ style, prop, original: val, priority });
+          style.setProperty(prop, replaced, priority);
+        }
+      }
+    };
+    for (const sheet of document.styleSheets) {
+      let rules = null;
+      try { rules = sheet.cssRules; } catch (_) { continue; } // CORS-blocked
+      visit(rules);
+    }
+    return patches;
+  }
+
+  function revertStylesheetPatches(patches) {
+    for (const { style, prop, original, priority } of patches) {
+      try { style.setProperty(prop, original, priority); } catch (_) {}
+    }
+  }
 
   async function cmdScreenshot({ selector } = {}) {
     if (!window.html2canvas) {
@@ -904,15 +1074,51 @@
     }
     const target = selector ? document.querySelector(selector) : document.documentElement;
     if (!target) throw new Error("No element found for selector: " + selector);
-    const canvas = await window.html2canvas(target, {
-      useCORS: true,
-      allowTaint: true,
-      logging: false,
-      ignoreElements: (el) => el.id === "la-root",
-    });
-    const dataUrl = canvas.toDataURL("image/png");
-    const base64 = dataUrl.replace(/^data:image\/png;base64,/, "");
-    return { ok: true, base64, width: canvas.width, height: canvas.height };
+
+    const patches = patchStylesheetsForCapture();
+    try {
+      const canvas = await window.html2canvas(target, {
+        useCORS: true,
+        allowTaint: true,
+        logging: false,
+        ignoreElements: (el) => el.id === "la-root",
+      });
+      const dataUrl = canvas.toDataURL("image/png");
+      const base64 = dataUrl.replace(/^data:image\/png;base64,/, "");
+      recordScreenshot({
+        dataUrl,
+        width: canvas.width,
+        height: canvas.height,
+        selector: selector || null,
+      });
+      return {
+        ok: true,
+        base64,
+        width: canvas.width,
+        height: canvas.height,
+        oklch_patches: patches.length,
+      };
+    } finally {
+      revertStylesheetPatches(patches);
+    }
+  }
+
+  function recordScreenshot({ dataUrl, width, height, selector }) {
+    const entry = {
+      id: "shot-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8),
+      ts: Date.now(),
+      dataUrl,
+      width,
+      height,
+      selector,
+    };
+    state.screenshots.unshift(entry);
+    if (state.screenshots.length > SCREENSHOT_HISTORY_LIMIT) {
+      state.screenshots.length = SCREENSHOT_HISTORY_LIMIT;
+    }
+    if (state.openPanes.includes("screenshots")) {
+      renderPaneContent("screenshots");
+    }
   }
 
   // ─── CSS injection ────────────────────────────────────────────────────────
@@ -1023,6 +1229,7 @@
             <button class="la-launch-btn" data-pane="timeline">Timeline</button>
             <button class="la-launch-btn" data-pane="async">Async</button>
             <button class="la-launch-btn" data-pane="resources">Resources</button>
+            <button class="la-launch-btn" data-pane="screenshots">Screenshots</button>
           </div>
           <div id="la-bar-right">
             <label id="la-drive-toggle" title="Allow Claude to click and navigate. Highlight works either way.">
@@ -1125,6 +1332,7 @@
       timeline: "Timeline",
       async: "Async",
       resources: "Resources",
+      screenshots: "Screenshots",
     };
     return titles[name] || name;
   }
@@ -1310,6 +1518,7 @@
     if (name === "timeline") el.innerHTML = renderTimeline();
     if (name === "async") el.innerHTML = renderAsync();
     if (name === "resources") el.innerHTML = renderResources();
+    if (name === "screenshots") el.innerHTML = renderScreenshots();
     attachPaneEvents(el, name);
   }
 
@@ -1390,6 +1599,22 @@
           if (arrow) arrow.textContent = open ? "▶" : "▼";
         });
       });
+    }
+
+    if (name === "screenshots") {
+      el.querySelectorAll(".la-shot-open, .la-shot-thumb").forEach((node) => {
+        node.addEventListener("click", () => openScreenshotInTab(node.dataset.shotId));
+      });
+      el.querySelectorAll(".la-shot-download").forEach((node) => {
+        node.addEventListener("click", () => downloadScreenshot(node.dataset.shotId));
+      });
+      const clear = el.querySelector("#la-shots-clear");
+      if (clear) {
+        clear.addEventListener("click", () => {
+          state.screenshots = [];
+          renderPaneContent("screenshots");
+        });
+      }
     }
   }
 
@@ -1713,6 +1938,79 @@
         ${calcs.length ? `<div class="la-section-label">Calculations</div><div class="la-chips">${calcRows}</div>` : ""}
         ${aggs.length ? `<div class="la-section-label">Aggregates</div><div class="la-chips">${aggRows}</div>` : ""}
       </div>`;
+  }
+
+  function renderScreenshots() {
+    const shots = state.screenshots || [];
+    const toolbar = `
+      <div class="la-events-toolbar">
+        <span class="la-dim">${shots.length} screenshot${shots.length !== 1 ? "s" : ""} (keeps last ${SCREENSHOT_HISTORY_LIMIT})</span>
+        ${shots.length ? '<button id="la-shots-clear" class="la-btn la-btn-danger" style="padding:2px 8px;font-size:11px">Clear</button>' : ""}
+      </div>`;
+
+    if (!shots.length) {
+      return toolbar + '<div class="la-dim" style="padding:12px">No screenshots yet. Captures from <code>take_screenshot</code> will appear here.</div>';
+    }
+
+    const tiles = shots
+      .map((s) => {
+        const when = new Date(s.ts).toLocaleTimeString();
+        const sel = s.selector ? escHtml(s.selector) : "full viewport";
+        return `
+          <div class="la-shot-tile" data-shot-id="${s.id}">
+            <img src="${s.dataUrl}" alt="screenshot at ${escHtml(when)}" class="la-shot-thumb" data-shot-id="${s.id}">
+            <div class="la-shot-meta">
+              <div class="la-shot-meta-row">
+                <span class="la-shot-time">${escHtml(when)}</span>
+                <span class="la-dim">${s.width}×${s.height}</span>
+              </div>
+              <div class="la-shot-meta-row la-dim" title="${escHtml(sel)}">${escHtml(sel)}</div>
+              <div class="la-shot-actions">
+                <button class="la-btn la-shot-open" data-shot-id="${s.id}">Open</button>
+                <button class="la-btn la-shot-download" data-shot-id="${s.id}">Download</button>
+              </div>
+            </div>
+          </div>`;
+      })
+      .join("");
+
+    return toolbar + `<div class="la-shot-grid">${tiles}</div>`;
+  }
+
+  function openScreenshotInTab(id) {
+    const shot = (state.screenshots || []).find((s) => s.id === id);
+    if (!shot) return;
+    // Convert the data URL to a Blob so it gets a stable about:blank-style URL
+    // (most browsers refuse top-level navigation to data: URLs).
+    const blob = dataUrlToBlob(shot.dataUrl);
+    const url = URL.createObjectURL(blob);
+    const win = window.open(url, "_blank", "noopener");
+    // Revoke after the new tab has had a chance to load the resource.
+    if (win) setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
+
+  function downloadScreenshot(id) {
+    const shot = (state.screenshots || []).find((s) => s.id === id);
+    if (!shot) return;
+    const a = document.createElement("a");
+    const stamp = new Date(shot.ts)
+      .toISOString()
+      .replace(/[-:]/g, "")
+      .replace(/\..*/, "");
+    a.href = shot.dataUrl;
+    a.download = `live_agent_screenshot_${stamp}.png`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  function dataUrlToBlob(dataUrl) {
+    const [meta, b64] = dataUrl.split(",");
+    const mime = (meta.match(/data:([^;]+)/) || [, "image/png"])[1];
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Blob([bytes], { type: mime });
   }
 
   function renderEvents() {

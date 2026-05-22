@@ -24,17 +24,18 @@ Think of it as `live_debugger` but as an MCP server — giving Claude Code live 
 
 LiveAgent auto-injects a **bottom panel** into every page of your app (dev only). Click the **⚡ LA** button in the bottom-right corner to open it.
 
-The panel has seven panels, each toggled independently from the launcher bar — open as many as you want side by side:
+The panel has eight panels, each toggled independently from the launcher bar — open as many as you want side by side:
 
-| Panel         | What it shows                                                                              |
-| ------------- | ------------------------------------------------------------------------------------------ |
-| **LiveViews** | All active LiveView processes — click `▶` to expand assigns inline                         |
-| **Selected**  | The DOM element you picked with the element picker, with component resolution              |
-| **Context**   | The element you pinned for Claude to read                                                  |
-| **Events**    | Live log of `handle_event`, `mount`, `handle_params`, and `handle_info` calls              |
-| **Timeline**  | Ordered list of assigns transitions per LiveView — trigger, diff counts, click to expand   |
-| **Async**     | In-flight `start_async` / `assign_async` tasks with live elapsed time, plus a completion history per LiveView |
-| **Resources** | All Ash resources — click `▶` to expand attributes, actions, and relationships             |
+| Panel           | What it shows                                                                              |
+| --------------- | ------------------------------------------------------------------------------------------ |
+| **LiveViews**   | All active LiveView processes — click `▶` to expand assigns inline                         |
+| **Selected**    | The DOM element you picked with the element picker, with component resolution              |
+| **Context**     | The element you pinned for Claude to read                                                  |
+| **Events**      | Live log of `handle_event`, `mount`, `handle_params`, and `handle_info` calls              |
+| **Timeline**    | Ordered list of assigns transitions per LiveView — trigger, diff counts, click to expand   |
+| **Async**       | In-flight `start_async` / `assign_async` tasks with live elapsed time, plus a completion history per LiveView |
+| **Resources**   | All Ash resources — click `▶` to expand attributes, actions, and relationships             |
+| **Screenshots** | Thumbnails of recent `take_screenshot` captures — click to open full-size in a new tab, or Download as PNG |
 
 Click any panel button in the top bar to open or close it. Drag the divider between open panels to resize them. Click **↗** to open the whole panel in a new tab.
 
@@ -47,6 +48,8 @@ The top-right of the bar also has the **Drive** toggle and the **agent control s
 **Events tab** — shows a scrolling log of LiveView telemetry events as they happen. Each row displays the event type, event name (for `handle_event`), the LiveView or LiveComponent that handled it, duration, and how long ago it occurred. Click any row to expand the params or error details. Duration is color-coded: green under 10ms, amber 10–100ms, red over 100ms. Exceptions are highlighted in red. The log holds the last 200 events and can be cleared with the Clear button.
 
 **Timeline tab** — groups recent assigns *transitions* by LiveView, newest first. Each row shows the trigger (`mount` / `handle_event` / `handle_params` / `live_component_event` / `handle_async` / `unknown`), the diff counts (`N changed, M added, K removed`), and the duration. Click any row to expand the full diff with `before`/`after` values. Unknown rows mean a render happened without a matching callback telemetry — almost always a `handle_info` (PubSub, `send_after`, etc.) since Phoenix doesn't emit telemetry for `handle_info`. (`handle_async` entries also start as "unknown" and are relabelled by the Async inspector when it sees the matching task exit.) Up to 50 entries per LiveView are kept in memory; processes that exit are dropped after a 60s grace period.
+
+**Screenshots tab** — every call to `take_screenshot` (whether you triggered it from Claude or anywhere else) is captured into this pane as a thumbnail. Click a thumbnail or the **Open** button to view full-size in a new tab; **Download** saves a PNG locally. The same image is also written to `/tmp/live_agent_screenshot_<timestamp>.png` server-side. The panel keeps the most recent 12 captures in memory — older ones are dropped when the limit is reached. **Clear** wipes the in-memory list (does not delete the `/tmp` files).
 
 **Async tab** — per LiveView, three sections:
 - **In flight** — tasks currently running, with the registry kind (`start` / `assign` / `stream`), task pid, and a live-updating elapsed time.
