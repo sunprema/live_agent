@@ -35,6 +35,7 @@
     _commandStatus: "idle", // "idle" | "connected" | "executing" | "error"
     driveEnabled: false,
     hideUnknownTimeline: false,
+    statusbarMode: false,
     screenshots: [], // {id, ts, dataUrl, width, height, selector}
   };
 
@@ -61,6 +62,7 @@
     }
 
     state.hideUnknownTimeline = localStorage.getItem("la-hide-unknown-timeline") === "1";
+    state.statusbarMode = localStorage.getItem("la-statusbar-mode") === "1";
   } catch (_) {
     // localStorage can throw in sandboxed contexts; default to off.
   }
@@ -1262,6 +1264,10 @@
               <input type="checkbox" id="la-drive-cb"${state.driveEnabled ? " checked" : ""}>
               <span>Drive</span>
             </label>
+            ${standalone ? "" : `<label id="la-statusbar-toggle" title="Collapse the panel to a thin status bar — frees up vertical space in the host app. Click any panel button to expand again.">
+              <input type="checkbox" id="la-statusbar-cb"${state.statusbarMode ? " checked" : ""}>
+              <span>Statusbar</span>
+            </label>`}
             <span id="la-cmd-pill" class="la-cmd-pill la-cmd-idle" title="Agent control: not connected"></span>
             <button id="la-pick-btn">&#128269; Pick</button>
             ${newTabBtn}
@@ -1289,6 +1295,11 @@
           localStorage.setItem("la-drive-enabled", driveCb.checked ? "1" : "0");
         } catch (_) {}
       });
+    }
+
+    const statusbarCb = document.getElementById("la-statusbar-cb");
+    if (statusbarCb) {
+      statusbarCb.addEventListener("change", () => setStatusbarMode(statusbarCb.checked));
     }
 
     const newTabEl = document.getElementById("la-newtab-btn");
@@ -1320,13 +1331,43 @@
   // make room for the fixed panel. `null` means "not currently offset".
   let _savedBodyPaddingBottom = null;
 
+  function panelExpandedHeightPx() {
+    return tallMode ? 520 : 300;
+  }
+
   function applyBodyOffset() {
     if (_savedBodyPaddingBottom === null) {
       _savedBodyPaddingBottom = document.body.style.paddingBottom || "";
     }
     const panel = document.getElementById("la-panel");
-    const height = panel ? panel.offsetHeight : tallMode ? 520 : 300;
+    const height = panel ? panel.offsetHeight : panelExpandedHeightPx();
     document.body.style.paddingBottom = height + "px";
+  }
+
+  function applyStatusbarMode() {
+    const panel = document.getElementById("la-panel");
+    const split = document.getElementById("la-split");
+    if (!panel || !split) return;
+    if (state.statusbarMode) {
+      split.style.display = "none";
+      // Match #la-bar height so only the toolbar shows. Setting height: auto
+      // would also work but we want a stable known size for body padding math.
+      panel.style.height = "36px";
+    } else {
+      split.style.display = "";
+      panel.style.height = panelExpandedHeightPx() + "px";
+    }
+    applyBodyOffset();
+  }
+
+  function setStatusbarMode(enabled) {
+    state.statusbarMode = !!enabled;
+    const cb = document.getElementById("la-statusbar-cb");
+    if (cb) cb.checked = state.statusbarMode;
+    try {
+      localStorage.setItem("la-statusbar-mode", state.statusbarMode ? "1" : "0");
+    } catch (_) {}
+    if (state.visible) applyStatusbarMode();
   }
 
   function clearBodyOffset() {
@@ -1341,7 +1382,7 @@
     document.getElementById("la-panel").style.display = "flex";
     document.getElementById("la-toggle").style.display = "none";
     rebuildSplit();
-    applyBodyOffset();
+    applyStatusbarMode();
     fetchLiveViews();
     state._pollTimer = setInterval(fetchLiveViews, 3000);
     startCommandLoop();
@@ -1362,6 +1403,9 @@
   }
 
   function toggleHeight() {
+    // Resize implies the user wants the panel expanded — exit statusbar mode
+    // first so the toggle has something to act on.
+    if (state.statusbarMode) setStatusbarMode(false);
     tallMode = !tallMode;
     const panel = document.getElementById("la-panel");
     panel.style.height = tallMode ? "520px" : "300px";
@@ -1435,6 +1479,9 @@
   }
 
   function togglePane(name) {
+    // Clicking a launcher button is a clear signal the user wants to see panes —
+    // exit statusbar mode so there's somewhere for the pane to render.
+    if (state.statusbarMode) setStatusbarMode(false);
     if (state.openPanes.includes(name)) removePane(name);
     else addPane(name);
   }

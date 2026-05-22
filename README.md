@@ -41,6 +41,8 @@ Click any panel button in the top bar to open or close it. Drag the divider betw
 
 The top-right of the bar also has the **Drive** toggle and the **agent control status dot** — when an open panel is connected, Claude can highlight elements and (with Drive on) click, fill, submit, and navigate. See the [Agent controls](#agent-controls) section below.
 
+**Statusbar checkbox** — next to **Drive**. Collapses the panel to just the toolbar strip (~36px tall), hiding the panes below and giving that vertical space back to the host app. The checked state is remembered per browser (localStorage). Clicking any panel button or the resize (↕) button automatically unchecks it so the panes can render again.
+
 **Element picker** — click **🔍 Pick**, then click any element on the page. LiveAgent captures its HTML, CSS classes, and Phoenix attributes (`phx-click`, `data-phx-component`, etc.). If the element belongs to a LiveComponent, the **Selected** panel automatically shows the component module, its `id`, and its current assign keys — resolved directly from the running BEAM process. Click **📋 Pin to Claude Context** to make it available to Claude via MCP.
 
 **Resources tab** — lists every Ash resource loaded in the running app. Click `▶` on any resource to expand a full breakdown: attributes with types and constraints, actions with their accepted fields and arguments, relationships with destination resources, and any calculations or aggregates. Loaded once when the tab is first opened. Requires Ash to be installed — the tab is still shown but displays a message if Ash is not available.
