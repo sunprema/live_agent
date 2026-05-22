@@ -989,7 +989,7 @@ defmodule LiveAgent.MCP.Tools do
   defp inject_css(%{"css" => css} = args) when is_binary(css) do
     id = Map.get(args, "id", "default")
     dispatch_browser_command("inject_css", %{css: css, id: id}, fn result ->
-      style_id = Map.get(result, "id", "la-css-#{id}")
+      style_id = Map.get(result, "style_id", "la-css-#{id}")
       len = Map.get(result, "length", 0)
       "CSS injected (#{len} chars) as <style id=\"#{style_id}\">. Call revert_css to undo."
     end)
