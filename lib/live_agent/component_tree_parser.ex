@@ -17,14 +17,16 @@ defmodule LiveAgent.ComponentTreeParser do
 
   # ── View ID ──────────────────────────────────────────────────────────────────
 
-  # The LV root element has data-phx-main="true" and id="phx-...".
-  # Attribute order varies so we try both orderings.
+  # The LV root element has data-phx-main and id="phx-...".
+  # Phoenix emits data-phx-main as a boolean attribute (no value); older
+  # versions / generators sometimes emit `data-phx-main="true"`. Accept both.
+  # Attribute order varies, so we try both orderings.
   defp extract_view_id(html) do
     cond do
-      m = Regex.run(~r/\bdata-phx-main="true"[^>]*\bid="([^"]+)"/, html) ->
+      m = Regex.run(~r/\bdata-phx-main\b(?:="[^"]*")?[^>]*\bid="([^"]+)"/, html) ->
         Enum.at(m, 1)
 
-      m = Regex.run(~r/\bid="([^"]+)"[^>]*\bdata-phx-main="true"/, html) ->
+      m = Regex.run(~r/\bid="([^"]+)"[^>]*\bdata-phx-main\b/, html) ->
         Enum.at(m, 1)
 
       true ->

@@ -5,6 +5,10 @@ defmodule LiveAgent.MCP.Tools do
   alias LiveAgent.AshInspector
 
   def tools do
+    base_tools() ++ optional_tools()
+  end
+
+  defp base_tools do
     [
       %{
         name: "list_live_views",
@@ -741,8 +745,195 @@ defmodule LiveAgent.MCP.Tools do
         description: "Clears the error log. Useful before making a change so subsequent get_errors calls only show new errors.",
         inputSchema: %{type: "object", properties: %{}, required: []},
         callback: &clear_errors/1
+      },
+      %{
+        name: "get_browser_logs",
+        description: """
+        Returns a tail of `console.{log,info,warn,error,debug}` calls captured
+        from the host page since the LiveAgent server started.
+
+        Useful when a browser-side command (click, screenshot, hook code, your
+        own injected script) seems to fail silently — pull the console to see
+        what the page actually said, without asking the user to open devtools.
+
+        Filters:
+          * `levels` — restrict to a subset, e.g. ["warn", "error"]. Defaults to all.
+          * `since_id` — only entries newer than this id (use the `id` from the
+            latest response to tail incrementally).
+          * `limit` — cap on rows returned (default 100, max 500).
+
+        Capture is a ring buffer (last 500 entries across all levels). Calls
+        from inside the LiveAgent panel itself are excluded.
+        """,
+        inputSchema: %{
+          type: "object",
+          properties: %{
+            levels: %{
+              type: "array",
+              items: %{type: "string", enum: ["log", "info", "warn", "error", "debug"]},
+              description: "Restrict to these levels (default: all)"
+            },
+            since_id: %{type: "integer", description: "Return only entries with id greater than this (default: 0 = all)"},
+            limit: %{type: "integer", description: "Max entries (default 100, max 500)"}
+          },
+          required: []
+        },
+        callback: &get_browser_logs/1
+      },
+      %{
+        name: "clear_browser_logs",
+        description: "Clears the browser console log buffer. Use before reproducing an issue so subsequent get_browser_logs calls only show new entries.",
+        inputSchema: %{type: "object", properties: %{}, required: []},
+        callback: &clear_browser_logs/1
+      },
+      %{
+        name: "list_lv_routes",
+        description: """
+        Lists every Phoenix LiveView route in every router loaded in the running
+        VM. Use this before calling `navigate` so you don't have to grep the
+        host app's router.ex.
+
+        Returns path, LiveView module, live_action, live_session, and the parent
+        router for each route. Optionally filter by router (substring match) or
+        by path prefix.
+        """,
+        inputSchema: %{
+          type: "object",
+          properties: %{
+            router: %{type: "string", description: "Substring match on the router module name (e.g. \"AppWeb\" or \"Admin\")"},
+            path_prefix: %{type: "string", description: "Only return routes whose path starts with this string"}
+          },
+          required: []
+        },
+        callback: &list_lv_routes/1
       }
     ]
+  end
+
+  # Tools that the host has to opt into via `plug LiveAgent, oban_tools: true`
+  # (and similar). Surfaced only when enabled so MCP clients don't see tools
+  # that would always 4xx.
+  defp optional_tools do
+    oban_tools_if_enabled() ++ pubsub_tools_if_enabled()
+  end
+
+  defp oban_tools_if_enabled do
+    if LiveAgent.Config.oban_tools_enabled?() do
+      [
+        %{
+          name: "list_oban_jobs",
+          description: """
+          Lists rows from the host app's `oban_jobs` table. Useful for
+          verifying scheduled check-ins, retry behavior, and queue health
+          without going through SQL.
+
+          Filters (all optional):
+            * `state` — one of: scheduled, available, executing, retryable,
+              completed, discarded, cancelled
+            * `queue` — exact queue name
+            * `worker` — exact worker module name
+            * `limit` — default 50, max 200
+
+          Enabled by `plug LiveAgent, oban_tools: true` in the host endpoint.
+          """,
+          inputSchema: %{
+            type: "object",
+            properties: %{
+              state: %{type: "string", description: "Filter by job state"},
+              queue: %{type: "string", description: "Filter by queue name"},
+              worker: %{type: "string", description: "Filter by worker module"},
+              limit: %{type: "integer", description: "Max rows (default 50, max 200)"}
+            },
+            required: []
+          },
+          callback: &list_oban_jobs/1
+        },
+        %{
+          name: "get_oban_job",
+          description: """
+          Fetch full details for one Oban job by id, including its error
+          history (the closest thing Oban exposes to a per-job log).
+
+          Enabled by `plug LiveAgent, oban_tools: true`.
+          """,
+          inputSchema: %{
+            type: "object",
+            properties: %{
+              id: %{type: "integer", description: "oban_jobs.id"}
+            },
+            required: ["id"]
+          },
+          callback: &get_oban_job/1
+        },
+        %{
+          name: "retry_oban_job",
+          description: """
+          Move an Oban job back to `available` so it's picked up on the next
+          queue poll. Wraps `Oban.retry_job/1`. Useful for re-running a
+          discarded or completed job during debugging.
+
+          Enabled by `plug LiveAgent, oban_tools: true`.
+          """,
+          inputSchema: %{
+            type: "object",
+            properties: %{
+              id: %{type: "integer", description: "oban_jobs.id"}
+            },
+            required: ["id"]
+          },
+          callback: &retry_oban_job/1
+        }
+      ]
+    else
+      []
+    end
+  end
+
+  defp pubsub_tools_if_enabled do
+    if LiveAgent.Config.pubsub_tools_enabled?() do
+      [
+        %{
+          name: "list_pubsub_topics",
+          description: """
+          Lists every Phoenix.PubSub topic that currently has at least one
+          local subscriber, with subscriber counts. Useful for verifying
+          realtime fan-out and discovering topic names without grepping the
+          codebase.
+
+          Enabled by `plug LiveAgent, pubsub_tools: true` (auto-discovers
+          the host's PubSub) or `pubsub_tools: MyApp.PubSub` (explicit).
+          """,
+          inputSchema: %{type: "object", properties: %{}, required: []},
+          callback: &list_pubsub_topics/1
+        },
+        %{
+          name: "tail_pubsub_topic",
+          description: """
+          Subscribes to a Phoenix.PubSub topic from a temporary task and
+          returns up to `max_n` messages received within `wait_ms`.
+          Blocks the MCP call for up to `wait_ms`.
+
+          Useful for verifying that an action fans out the expected events —
+          run this in one call, trigger the action in another (e.g. via
+          `click`), and the second call returns the captured messages.
+
+          Enabled by `plug LiveAgent, pubsub_tools: ...`.
+          """,
+          inputSchema: %{
+            type: "object",
+            properties: %{
+              topic: %{type: "string", description: "Topic to subscribe to (e.g. \"demo:mode\")"},
+              wait_ms: %{type: "integer", description: "Max time to wait for messages (default 5000, max 30000)"},
+              max_n: %{type: "integer", description: "Max messages to capture before returning early (default 50, max 500)"}
+            },
+            required: ["topic"]
+          },
+          callback: &tail_pubsub_topic/1
+        }
+      ]
+    else
+      []
+    end
   end
 
   defp list_live_views(_args) do
@@ -1108,6 +1299,266 @@ defmodule LiveAgent.MCP.Tools do
   defp clear_errors(_args) do
     LiveAgent.ErrorStore.clear()
     {:ok, "Error log cleared."}
+  end
+
+  # ── Console capture ───────────────────────────────────────────────────────
+
+  defp get_browser_logs(args) when is_map(args) do
+    since_id = Map.get(args, "since_id", 0)
+    limit = Map.get(args, "limit", 100) |> min(500) |> max(1)
+    levels = Map.get(args, "levels", :all) |> normalize_levels()
+
+    logs = LiveAgent.ConsoleLogStore.get_logs(since_id: since_id, levels: levels, limit: limit)
+
+    if Enum.empty?(logs) do
+      suffix =
+        cond do
+          since_id > 0 -> " since id #{since_id}"
+          levels != :all -> " at levels #{inspect(levels)}"
+          true -> ""
+        end
+
+      {:ok, "No browser console entries#{suffix}."}
+    else
+      counts = Enum.frequencies_by(logs, & &1.level)
+      counts_text = Enum.map_join(counts, ", ", fn {lvl, n} -> "#{lvl}: #{n}" end)
+      header =
+        "#{length(logs)} console entr(ies). Latest id: #{hd(logs).id}. Levels — #{counts_text}.\n"
+
+      body = logs |> Enum.map(&format_console_entry/1) |> Enum.join("\n")
+      {:ok, header <> body}
+    end
+  end
+
+  defp clear_browser_logs(_args) do
+    LiveAgent.ConsoleLogStore.clear()
+    {:ok, "Browser console log cleared."}
+  end
+
+  # ── Route inspection ──────────────────────────────────────────────────────
+
+  defp list_lv_routes(args) when is_map(args) do
+    router_filter = Map.get(args, "router")
+    path_prefix = Map.get(args, "path_prefix")
+
+    routes =
+      LiveAgent.RouteInspector.list_live_routes()
+      |> filter_by_router(router_filter)
+      |> filter_by_path(path_prefix)
+
+    if Enum.empty?(routes) do
+      {:ok, "No LiveView routes found#{describe_filters(router_filter, path_prefix)}."}
+    else
+      grouped = Enum.group_by(routes, & &1.router)
+
+      sections =
+        grouped
+        |> Enum.sort_by(fn {router, _} -> router end)
+        |> Enum.map(fn {router, rs} ->
+          rows = Enum.map(rs, &format_route_row/1) |> Enum.join("\n")
+          "── #{router} (#{length(rs)} route#{if length(rs) == 1, do: "", else: "s"}) ──\n#{rows}"
+        end)
+        |> Enum.join("\n\n")
+
+      header = "Found #{length(routes)} LiveView route(s) across #{map_size(grouped)} router(s).\n"
+      {:ok, header <> sections}
+    end
+  end
+
+  defp filter_by_router(routes, nil), do: routes
+  defp filter_by_router(routes, ""), do: routes
+  defp filter_by_router(routes, sub), do: Enum.filter(routes, &String.contains?(&1.router, sub))
+
+  defp filter_by_path(routes, nil), do: routes
+  defp filter_by_path(routes, ""), do: routes
+  defp filter_by_path(routes, prefix), do: Enum.filter(routes, &String.starts_with?(&1.path, prefix))
+
+  defp describe_filters(nil, nil), do: ""
+  defp describe_filters(r, nil), do: " (router contains #{inspect(r)})"
+  defp describe_filters(nil, p), do: " (path starts with #{inspect(p)})"
+  defp describe_filters(r, p), do: " (router contains #{inspect(r)}, path starts with #{inspect(p)})"
+
+  defp format_route_row(r) do
+    session = if r.live_session, do: " [session: #{r.live_session}]", else: ""
+    "  #{String.pad_trailing(r.path, 32)} → #{r.module} (:#{r.live_action})#{session}"
+  end
+
+  # ── Oban introspection (opt-in) ───────────────────────────────────────────
+
+  defp list_oban_jobs(args) when is_map(args) do
+    opts = [
+      state: Map.get(args, "state"),
+      queue: Map.get(args, "queue"),
+      worker: Map.get(args, "worker"),
+      limit: Map.get(args, "limit")
+    ]
+
+    case LiveAgent.ObanInspector.list_jobs(opts) do
+      {:ok, []} ->
+        {:ok, "No Oban jobs matched#{describe_oban_filters(opts)}."}
+
+      {:ok, jobs} ->
+        by_state = Enum.frequencies_by(jobs, & &1["state"])
+        counts = Enum.map_join(by_state, ", ", fn {s, n} -> "#{s}: #{n}" end)
+        header = "#{length(jobs)} oban job(s). By state — #{counts}.\n"
+        body = jobs |> Enum.map(&format_oban_row/1) |> Enum.join("\n")
+        {:ok, header <> body}
+
+      {:error, msg} ->
+        {:error, msg}
+    end
+  end
+
+  defp get_oban_job(%{"id" => id}) when is_integer(id) do
+    case LiveAgent.ObanInspector.get_job(id) do
+      {:ok, job} -> {:ok, format_oban_job_detail(job)}
+      {:error, msg} -> {:error, msg}
+    end
+  end
+
+  defp get_oban_job(_), do: {:error, "id is required and must be an integer"}
+
+  defp retry_oban_job(%{"id" => id}) when is_integer(id) do
+    case LiveAgent.ObanInspector.retry_job(id) do
+      :ok -> {:ok, "Job #{id} moved back to available."}
+      {:error, msg} -> {:error, msg}
+    end
+  end
+
+  defp retry_oban_job(_), do: {:error, "id is required and must be an integer"}
+
+  defp describe_oban_filters(opts) do
+    parts =
+      opts
+      |> Enum.filter(fn {_k, v} -> v not in [nil, ""] end)
+      |> Enum.map(fn {k, v} -> "#{k}=#{v}" end)
+
+    case parts do
+      [] -> ""
+      ps -> " (filters: #{Enum.join(ps, ", ")})"
+    end
+  end
+
+  defp format_oban_row(j) do
+    attempts = "#{j["attempt"]}/#{j["max_attempts"]}"
+    sched = j["scheduled_at"] || j["inserted_at"] || "-"
+    "  [#{j["id"]}] #{String.pad_trailing(j["state"], 10)} #{String.pad_trailing(j["queue"], 14)} #{j["worker"]} (#{attempts}) sched=#{sched}"
+  end
+
+  defp format_oban_job_detail(j) do
+    errors = j["errors"] || []
+
+    error_section =
+      case errors do
+        [] -> "  errors:    (none)"
+        _ ->
+          formatted =
+            errors
+            |> Enum.with_index(1)
+            |> Enum.map(fn {e, i} ->
+              attempt = Map.get(e, "attempt") || Map.get(e, :attempt)
+              at = Map.get(e, "at") || Map.get(e, :at)
+              err = Map.get(e, "error") || Map.get(e, :error)
+              "    ##{i} attempt=#{attempt} at=#{at}\n      #{truncate(to_string(err), 600)}"
+            end)
+            |> Enum.join("\n")
+
+          "  errors:\n#{formatted}"
+      end
+
+    """
+    Oban job ##{j["id"]}
+      state:     #{j["state"]}
+      queue:     #{j["queue"]}
+      worker:    #{j["worker"]}
+      attempt:   #{j["attempt"]}/#{j["max_attempts"]}
+      priority:  #{j["priority"]}
+      sched_at:  #{j["scheduled_at"]}
+      attempted: #{j["attempted_at"] || "-"}
+      completed: #{j["completed_at"] || "-"}
+      discarded: #{j["discarded_at"] || "-"}
+      cancelled: #{j["cancelled_at"] || "-"}
+      tags:      #{inspect(j["tags"])}
+      args:      #{truncate(inspect(j["args"]), 600)}
+    #{error_section}
+    """
+  end
+
+  defp truncate(str, n) when byte_size(str) > n, do: binary_part(str, 0, n) <> "…"
+  defp truncate(str, _), do: str
+
+  # ── PubSub introspection (opt-in) ─────────────────────────────────────────
+
+  defp list_pubsub_topics(_args) do
+    with {:ok, pubsub} <- resolve_pubsub() do
+      case LiveAgent.PubSubInspector.list_topics(pubsub) do
+        [] ->
+          {:ok, "PubSub: #{inspect(pubsub)} — no topics with local subscribers."}
+
+        rows ->
+          body =
+            rows
+            |> Enum.map(fn {topic, count} ->
+              "  #{String.pad_trailing(topic, 32)} #{count} sub(s)"
+            end)
+            |> Enum.join("\n")
+
+          {:ok, "PubSub: #{inspect(pubsub)} — #{length(rows)} active topic(s).\n#{body}"}
+      end
+    end
+  end
+
+  defp tail_pubsub_topic(%{"topic" => topic} = args) when is_binary(topic) do
+    with {:ok, pubsub} <- resolve_pubsub() do
+      opts = [
+        wait_ms: Map.get(args, "wait_ms"),
+        max_n: Map.get(args, "max_n")
+      ]
+
+      case LiveAgent.PubSubInspector.tail_topic(pubsub, topic, opts) do
+        {:ok, []} ->
+          waited = opts[:wait_ms] || 5_000
+          {:ok, "PubSub #{inspect(pubsub)} topic #{inspect(topic)} — no messages in #{waited}ms."}
+
+        {:ok, msgs} ->
+          body =
+            msgs
+            |> Enum.with_index(1)
+            |> Enum.map(fn {m, i} -> "  ##{i} #{m.at}\n      #{m.payload}" end)
+            |> Enum.join("\n")
+
+          {:ok, "PubSub #{inspect(pubsub)} topic #{inspect(topic)} — captured #{length(msgs)} message(s).\n#{body}"}
+
+        {:error, msg} ->
+          {:error, msg}
+      end
+    end
+  end
+
+  defp tail_pubsub_topic(_), do: {:error, "topic is required and must be a string"}
+
+  defp resolve_pubsub do
+    case LiveAgent.Config.pubsub_tools() do
+      :disabled ->
+        {:error, "PubSub tools are not enabled. Add `pubsub_tools: true` (auto-discover) or `pubsub_tools: MyApp.PubSub` to your `plug LiveAgent, ...` config."}
+
+      {:ok, :auto} ->
+        LiveAgent.PubSubInspector.discover_pubsub()
+
+      {:ok, name} when is_atom(name) ->
+        {:ok, name}
+    end
+  end
+
+  defp normalize_levels(:all), do: :all
+  defp normalize_levels(list) when is_list(list), do: Enum.filter(list, &is_binary/1)
+  defp normalize_levels(_), do: :all
+
+  defp format_console_entry(e) do
+    time = e.timestamp |> String.slice(11, 12)
+    level = e.level |> String.upcase() |> String.pad_trailing(5)
+    url = e.url || "-"
+    "[#{e.id}] #{time} #{level} #{url}  #{e.message}"
   end
 
   defp maybe_append_errors(sections, _title, [], _formatter), do: sections

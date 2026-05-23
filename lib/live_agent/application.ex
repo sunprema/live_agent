@@ -12,7 +12,8 @@ defmodule LiveAgent.Application do
       LiveAgent.WatchStore,
       LiveAgent.PanelStatus,
       LiveAgent.CommandQueue,
-      LiveAgent.ErrorStore
+      LiveAgent.ErrorStore,
+      LiveAgent.ConsoleLogStore
     ]
     Supervisor.start_link(children, strategy: :one_for_one, name: LiveAgent.Supervisor)
   end

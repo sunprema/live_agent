@@ -7,7 +7,9 @@ defmodule LiveAgent do
     %{
       allow_remote_access: Keyword.get(opts, :allow_remote_access, false),
       drive_default: Keyword.get(opts, :drive_default, false),
-      open_default: Keyword.get(opts, :open_default, false)
+      open_default: Keyword.get(opts, :open_default, false),
+      oban_tools: Keyword.get(opts, :oban_tools, false),
+      pubsub_tools: Keyword.get(opts, :pubsub_tools, false)
     }
   end
 
@@ -28,6 +30,8 @@ defmodule LiveAgent do
   def call(%Plug.Conn{path_info: ["phoenix" | _]} = conn, _config), do: conn
 
   def call(conn, config) do
+    LiveAgent.Config.capture(config)
+
     Plug.Conn.register_before_send(conn, fn conn ->
       content_type = Plug.Conn.get_resp_header(conn, "content-type")
 

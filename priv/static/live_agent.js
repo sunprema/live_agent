@@ -125,6 +125,127 @@
     });
   })();
 
+  // ─── Console capture ───────────────────────────────────────────────────────
+  // Wraps console.{log,info,warn,error,debug} so MCP callers can pull a tail
+  // of the host page's browser console without asking the user to open
+  // devtools. Saves originals first so devtools still shows everything live,
+  // and so panel-internal code can opt out by using `nativeConsole.*`.
+  //
+  // Entries are batched and POSTed to /api/console every 250ms (or sooner if
+  // the local buffer fills up). On page hide/unload, we flush via sendBeacon
+  // so logs from the moments before a reload aren't lost.
+
+  const nativeConsole = {
+    log: console.log.bind(console),
+    info: console.info.bind(console),
+    warn: console.warn.bind(console),
+    error: console.error.bind(console),
+    debug: console.debug ? console.debug.bind(console) : console.log.bind(console),
+  };
+
+  (function () {
+    const LEVELS = ["log", "info", "warn", "error", "debug"];
+    const MAX_BUFFER = 200;
+    const FLUSH_INTERVAL_MS = 250;
+    const FLUSH_AT_SIZE = 50;
+    const ARG_CHAR_LIMIT = 1000;
+
+    const buffer = [];
+    let flushTimer = null;
+
+    function serializeArg(arg) {
+      if (arg === null) return "null";
+      if (arg === undefined) return "undefined";
+      if (typeof arg === "string") return arg;
+      if (typeof arg === "number" || typeof arg === "boolean") return String(arg);
+      if (arg instanceof Error) {
+        return arg.stack ? arg.message + "\n" + arg.stack : arg.message;
+      }
+      try {
+        return JSON.stringify(arg, replacerWithCycleGuard());
+      } catch (_) {
+        try { return String(arg); } catch (__) { return "[unserializable]"; }
+      }
+    }
+
+    function replacerWithCycleGuard() {
+      const seen = new WeakSet();
+      return function (_key, value) {
+        if (typeof value === "object" && value !== null) {
+          if (seen.has(value)) return "[circular]";
+          seen.add(value);
+        }
+        return value;
+      };
+    }
+
+    function record(level, args) {
+      const parts = [];
+      for (let i = 0; i < args.length; i++) {
+        let s = serializeArg(args[i]);
+        if (s.length > ARG_CHAR_LIMIT) s = s.slice(0, ARG_CHAR_LIMIT) + "…";
+        parts.push(s);
+      }
+      buffer.push({
+        level,
+        message: parts.join(" "),
+        url: location.pathname + location.search,
+        timestamp: new Date().toISOString(),
+      });
+      // bound memory if the server's down
+      if (buffer.length > MAX_BUFFER) buffer.splice(0, buffer.length - MAX_BUFFER);
+      if (buffer.length >= FLUSH_AT_SIZE) scheduleFlush(0);
+      else scheduleFlush(FLUSH_INTERVAL_MS);
+    }
+
+    function scheduleFlush(delay) {
+      if (flushTimer) return;
+      flushTimer = setTimeout(flush, delay);
+    }
+
+    function flush() {
+      flushTimer = null;
+      if (buffer.length === 0) return;
+      const entries = buffer.splice(0, buffer.length);
+      fetch(BASE + "/api/console", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ entries }),
+        keepalive: true,
+      }).catch(() => {});
+    }
+
+    function beaconFlush() {
+      if (buffer.length === 0) return;
+      const entries = buffer.splice(0, buffer.length);
+      const body = JSON.stringify({ entries });
+      if (navigator.sendBeacon) {
+        try {
+          const blob = new Blob([body], { type: "application/json" });
+          navigator.sendBeacon(BASE + "/api/console", blob);
+          return;
+        } catch (_) { /* fall through */ }
+      }
+      fetch(BASE + "/api/console", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+        keepalive: true,
+      }).catch(() => {});
+    }
+
+    for (const level of LEVELS) {
+      const orig = nativeConsole[level];
+      console[level] = function () {
+        try { record(level, arguments); } catch (_) { /* never break console */ }
+        orig.apply(console, arguments);
+      };
+    }
+
+    window.addEventListener("pagehide", beaconFlush);
+    window.addEventListener("beforeunload", beaconFlush);
+  })();
+
   // ─── Element Picker ────────────────────────────────────────────────────────
 
   function startPicker() {
@@ -446,7 +567,7 @@
         }
       })
       .catch((err) => {
-        console.warn("[live_agent] command poll failed:", err);
+        nativeConsole.warn("[live_agent] command poll failed:", err);
         setCommandStatus("error");
         return new Promise((res) => setTimeout(res, 2000));
       })
@@ -710,6 +831,10 @@
       .forEach((el) => {
         if (seen.has(el)) return;
         seen.add(el);
+        // Phoenix's stock disconnect templates (#client-error, #server-error)
+        // and any other flash containers that are present-but-hidden are not
+        // real flashes — they'd otherwise spam every click/navigate response.
+        if (!isVisible(el)) return;
         const text = (el.textContent || "").trim();
         if (!text) return;
         flashes.push({
@@ -723,6 +848,16 @@
         });
       });
     return flashes;
+  }
+
+  function isVisible(el) {
+    if (el.hidden) return false;
+    const style = window.getComputedStyle(el);
+    if (style.display === "none") return false;
+    if (style.visibility === "hidden") return false;
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) return false;
+    return true;
   }
 
   function cmdClick(args) {

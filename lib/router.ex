@@ -240,6 +240,41 @@ defmodule LiveAgent.Router do
     |> halt()
   end
 
+  # Browser console capture. Panel batches console.{log,info,warn,error,debug}
+  # calls and POSTs them here. Kept separate from /api/errors so the noise
+  # profiles don't bleed into each other.
+  post "/api/console" do
+    opts = Plug.Parsers.init(parsers: [:json], pass: [], json_decoder: Jason)
+    conn = Plug.Parsers.call(conn, opts)
+    entries = Map.get(conn.body_params, "entries", [])
+    if is_list(entries), do: LiveAgent.ConsoleLogStore.push_batch(entries)
+
+    conn
+    |> put_resp_header("content-type", "application/json")
+    |> send_resp(200, "{\"ok\":true}")
+    |> halt()
+  end
+
+  get "/api/console" do
+    conn = fetch_query_params(conn)
+    since_id = conn.query_params |> Map.get("since", "0") |> String.to_integer()
+    logs = LiveAgent.ConsoleLogStore.get_logs(since_id: since_id)
+
+    conn
+    |> put_resp_header("content-type", "application/json")
+    |> send_resp(200, Jason.encode!(logs))
+    |> halt()
+  end
+
+  delete "/api/console" do
+    LiveAgent.ConsoleLogStore.clear()
+
+    conn
+    |> put_resp_header("content-type", "application/json")
+    |> send_resp(200, "{\"ok\":true}")
+    |> halt()
+  end
+
   get "/api/events" do
     conn = fetch_query_params(conn)
     since_id = conn.query_params |> Map.get("since", "0") |> String.to_integer()
