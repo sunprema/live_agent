@@ -84,7 +84,7 @@ Claude Code can call these tools while you work:
 | `highlight_element`     | Draws a Chrome DevTools-style overlay on an element in the user's browser (by cid / CSS selector / visible text). Requires the panel to be open. |
 | `clear_highlight`       | Removes any active highlight overlay                                            |
 | `click`                 | Clicks an element in the user's browser (by cid / selector / text). Requires the panel open and the **Drive** toggle ON. Returns URL/view/flash and a server-side assigns diff. |
-| `navigate`              | Navigates the browser to a path. Modes: `patch` (default, in-LV), `navigate` (cross-LV `live_redirect`), `href` (full reload). Requires **Drive** ON. |
+| `navigate`              | Navigates the browser to a path. Modes: `auto` (default — resolves via the host router: `patch` for same-LV with `handle_params/3`, `navigate` for cross-LV or LVs without `handle_params/3`, `href` for non-LV routes), `patch`, `navigate`, `href`. Requires **Drive** ON. |
 | `fill`                  | Sets a form input's value and dispatches `input`+`change` (so `phx-change` fires). Handles text/select/textarea, checkboxes, radios, and contenteditable. Requires **Drive** ON. |
 | `submit`                | Submits a form via `form.requestSubmit()` (triggers `phx-submit` + HTML5 validation). Target can be the form or any element inside it. Requires **Drive** ON. |
 | `wait_for`              | Blocks until a condition is met. Modes: `{assign: {pid, key, equals?}}` polls a LiveView assign server-side (panel not required); `{selector}` / `{text}` use a browser MutationObserver. Default `timeout_ms` 5000. |

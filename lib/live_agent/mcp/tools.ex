@@ -416,7 +416,13 @@ defmodule LiveAgent.MCP.Tools do
         Navigates the user's browser to a path.
 
         Modes:
-          - patch    (default): in-LV partial update (data-phx-link="patch")
+          - auto     (default): picks patch/navigate/href by inspecting the host
+                                router. Patch when the target resolves to the
+                                same LV module as the current root LV *and* that
+                                module defines handle_params/3; navigate for
+                                cross-LV or LVs without handle_params/3; href
+                                when the target isn't a LiveView route.
+          - patch:    in-LV partial update (data-phx-link="patch")
           - navigate: cross-LV live_redirect (data-phx-link="redirect")
           - href:     full page navigation (browser reload)
 
@@ -430,8 +436,8 @@ defmodule LiveAgent.MCP.Tools do
             path: %{type: "string", description: "Path to navigate to, e.g. \"/cart\""},
             mode: %{
               type: "string",
-              enum: ["patch", "navigate", "href"],
-              description: "Navigation strategy (default: patch)"
+              enum: ["auto", "patch", "navigate", "href"],
+              description: "Navigation strategy (default: auto)"
             }
           }
         },
@@ -1505,11 +1511,16 @@ defmodule LiveAgent.MCP.Tools do
   end
 
   defp navigate(%{"path" => path} = args) when is_binary(path) do
-    payload = args |> Map.take(["path", "mode"])
+    mode = resolve_navigate_mode(Map.get(args, "mode"), path)
+    payload = %{"path" => path, "mode" => mode}
     dispatch_drive_command("navigate", payload, &format_drive_result(&1, "Navigated"))
   end
 
   defp navigate(_), do: {:error, "navigate requires 'path' (string)"}
+
+  defp resolve_navigate_mode(nil, path), do: resolve_navigate_mode("auto", path)
+  defp resolve_navigate_mode("auto", path), do: LiveAgent.SocketInspector.resolve_navigation_mode(path)
+  defp resolve_navigate_mode(explicit, _path) when is_binary(explicit), do: explicit
 
   defp fill(%{"value" => value} = args) do
     payload = args |> Map.take(["cid", "selector", "text"]) |> Map.put("value", value)

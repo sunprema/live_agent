@@ -77,6 +77,81 @@ defmodule LiveAgent.SocketInspector do
     end
   end
 
+  @doc """
+  Decides which client-side navigation strategy is safe for `target_path`,
+  given what's currently mounted. Returns `"patch"`, `"navigate"`, or `"href"`.
+
+  Rules:
+    - `"patch"`  — target resolves to the *same* LV module as the current root
+                   LV and that module defines `handle_params/3`.
+    - `"navigate"` — target is a LiveView route but in a different module,
+                     or the same module without `handle_params/3` (so a patch
+                     would raise `UndefinedFunctionError`).
+    - `"href"`   — target is a non-LV route (controller) or no route matched;
+                   only a full page navigation will work.
+
+  Falls back to `"navigate"` when no connected root LV is available to peek at
+  (we can't see a router, so we pick the safer of the two LV options).
+  """
+  def resolve_navigation_mode(target_path) when is_binary(target_path) do
+    case find_root_socket() do
+      %Phoenix.LiveView.Socket{} = socket ->
+        case lookup_route(socket, target_path) do
+          %{phoenix_live_view: {target_mod, _action, _opts, _live_session}} ->
+            cond do
+              target_mod != socket.view -> "navigate"
+              function_exported?(target_mod, :handle_params, 3) -> "patch"
+              true -> "navigate"
+            end
+
+          %{} ->
+            "href"
+
+          nil ->
+            "navigate"
+        end
+
+      nil ->
+        "navigate"
+    end
+  end
+
+  defp find_root_socket do
+    Enum.find_value(find_liveview_pids(), fn pid ->
+      case get_socket(pid) do
+        {:ok,
+         %Phoenix.LiveView.Socket{parent_pid: nil, transport_pid: tpid, router: router} = socket}
+        when not is_nil(tpid) and not is_nil(router) ->
+          socket
+
+        _ ->
+          nil
+      end
+    end)
+  end
+
+  defp lookup_route(%Phoenix.LiveView.Socket{router: router, host_uri: host_uri}, path) do
+    host =
+      case host_uri do
+        %URI{host: h} when is_binary(h) -> h
+        _ -> "localhost"
+      end
+
+    bare_path =
+      path
+      |> String.split("?", parts: 2)
+      |> hd()
+      |> String.split("#", parts: 2)
+      |> hd()
+
+    case Phoenix.Router.route_info(router, "GET", bare_path, host) do
+      info when is_map(info) -> info
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
   # --- Private ---
 
   defp find_liveview_pids do
