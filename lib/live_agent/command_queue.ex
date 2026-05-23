@@ -21,10 +21,42 @@ defmodule LiveAgent.CommandQueue do
   def start_link(_opts), do: GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
 
   @doc """
-  Enqueue a command for the browser and block until the panel posts the result
-  (or until `timeout_ms` elapses, in which case `{:error, :timeout}`).
+  Enqueue a command for the browser and block until the panel posts the
+  result.
+
+  Options:
+    * `:timeout_ms` (default 15_000) — total time to wait for the panel to
+      execute the command and POST back its result.
+    * `:wait_ready_ms` (default 3_000) — best-effort readiness gate. Blocks
+      briefly waiting for `LiveAgent.PanelStatus` to report the panel as
+      ready (panel polling, document loaded, liveSocket connected) before
+      enqueueing the command. This bridges the gap during a host
+      hot-reload, first-load, or cross-page navigation without leaking
+      transient failures up to MCP callers. Tunable per-call so callers
+      with a higher mis-fire cost (e.g. screenshot) can wait longer.
+
+  Returns `{:ok, result}` from the panel, or `{:error, :timeout}` if the
+  command's `:timeout_ms` elapsed before the panel responded. The
+  readiness gate itself never causes a failure — if the panel isn't ready
+  by `:wait_ready_ms`, the command is enqueued anyway and the regular
+  command timeout takes over.
+
+  Legacy integer timeout — `enqueue_and_await(op, args, 30_000)` — is
+  still accepted and interpreted as `[timeout_ms: 30_000]`.
   """
-  def enqueue_and_await(op, args, timeout_ms \\ 15_000) when is_binary(op) and is_map(args) do
+  def enqueue_and_await(op, args, opts \\ [])
+
+  def enqueue_and_await(op, args, timeout_ms)
+      when is_binary(op) and is_map(args) and is_integer(timeout_ms) do
+    enqueue_and_await(op, args, timeout_ms: timeout_ms)
+  end
+
+  def enqueue_and_await(op, args, opts) when is_binary(op) and is_map(args) and is_list(opts) do
+    timeout_ms = Keyword.get(opts, :timeout_ms, 15_000)
+    wait_ready_ms = Keyword.get(opts, :wait_ready_ms, 3_000)
+
+    LiveAgent.PanelStatus.wait_until_ready(wait_ready_ms)
+
     GenServer.call(
       __MODULE__,
       {:enqueue, op, args, timeout_ms},
@@ -46,6 +78,18 @@ defmodule LiveAgent.CommandQueue do
   """
   def post_result(id, result) when is_integer(id) do
     GenServer.call(__MODULE__, {:result, id, result})
+  end
+
+  @doc """
+  Whether a panel long-poll is currently parked, awaiting a command.
+
+  A parked waiter is positive proof a panel is alive (it just opened the
+  HTTP request), so `LiveAgent.PanelStatus` uses this to bridge the
+  freshness gap between long-poll cycles — heartbeat data only refreshes
+  at poll-start, but the poll itself can park for up to `@poll_timeout_ms`.
+  """
+  def has_parked_waiter? do
+    GenServer.call(__MODULE__, :has_parked_waiter?)
   end
 
   # ── GenServer ─────────────────────────────────────────────────────────────
@@ -93,6 +137,10 @@ defmodule LiveAgent.CommandQueue do
       pending ->
         {:reply, pending, %{state | pending: []}}
     end
+  end
+
+  def handle_call(:has_parked_waiter?, _from, state) do
+    {:reply, state.browser_waiters != [], state}
   end
 
   def handle_call({:result, id, result}, _from, state) do

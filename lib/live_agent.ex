@@ -19,6 +19,14 @@ defmodule LiveAgent do
     |> Plug.Conn.halt()
   end
 
+  # Phoenix's LiveReloader serves an iframe at /phoenix/live_reload/frame that
+  # is rendered into every dev page. If we inject the panel there too, the
+  # iframe runs its own copy of live_agent.js, polls /api/commands in parallel
+  # with the real page's panel, and competes for command dispatch — commands
+  # can land in the iframe (where the host DOM is absent) and time out. Skip
+  # injection for any /phoenix/* dev route.
+  def call(%Plug.Conn{path_info: ["phoenix" | _]} = conn, _config), do: conn
+
   def call(conn, config) do
     Plug.Conn.register_before_send(conn, fn conn ->
       content_type = Plug.Conn.get_resp_header(conn, "content-type")

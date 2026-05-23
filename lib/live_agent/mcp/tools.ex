@@ -221,6 +221,29 @@ defmodule LiveAgent.MCP.Tools do
         callback: &get_pinned_context/1
       },
       %{
+        name: "get_panel_status",
+        description: """
+        Returns the current readiness of the LiveAgent panel.
+
+        Browser-bound tools (click/navigate/fill/submit/take_screenshot/
+        highlight_element/inject_css/...) all route through a readiness gate
+        that waits briefly for the panel before dispatching. Call this tool
+        directly when a previous command timed out or returned an empty
+        result and you want to know *why* — typical answers:
+
+          - ready: true                 — panel parked, page hydrated, safe to retry
+          - "no panel has ever reported in" — no browser tab open on the host app
+          - "panel last seen too long ago"  — host page is mid hot-reload or navigation
+          - "document not fully loaded"     — page is still loading assets
+          - "liveSocket not connected"      — LV channel hasn't reconnected yet
+
+        Fields returned: ready, last_seen_age_ms, document_ready,
+        live_socket_connected, root_lv_present, generation, url, reason.
+        """,
+        inputSchema: %{type: "object", properties: %{}, required: []},
+        callback: &get_panel_status/1
+      },
+      %{
         name: "list_ash_resources",
         description: """
         Lists all Ash resources currently loaded in the running application.
@@ -1242,6 +1265,10 @@ defmodule LiveAgent.MCP.Tools do
     end
   end
 
+  defp get_panel_status(_args) do
+    {:ok, LiveAgent.PanelStatus.snapshot() |> Jason.encode!(pretty: true)}
+  end
+
   defp get_component_tree(_args) do
     trees = LiveAgent.ComponentTreeStore.all()
 
@@ -1433,7 +1460,10 @@ defmodule LiveAgent.MCP.Tools do
         sel -> %{selector: sel}
       end
 
-    case LiveAgent.CommandQueue.enqueue_and_await("screenshot", payload, 30_000) do
+    case LiveAgent.CommandQueue.enqueue_and_await("screenshot", payload,
+           timeout_ms: 30_000,
+           wait_ready_ms: 6_000
+         ) do
       {:ok, %{"ok" => true, "base64" => base64} = result} ->
         case save_screenshot_to_tmp(base64) do
           {:ok, path} ->
@@ -1447,7 +1477,7 @@ defmodule LiveAgent.MCP.Tools do
         {:error, "browser: " <> to_string(err)}
 
       {:error, :timeout} ->
-        {:error, "No LiveAgent panel responded. Open the panel in a browser tab and try again."}
+        {:error, panel_timeout_message()}
 
       {:error, reason} ->
         {:error, inspect(reason)}
@@ -1620,7 +1650,7 @@ defmodule LiveAgent.MCP.Tools do
   defp dispatch_drive_command(op, args, formatter) do
     before_snap = snapshot_all_live_views()
 
-    case LiveAgent.CommandQueue.enqueue_and_await(op, args) do
+    case LiveAgent.CommandQueue.enqueue_and_await(op, args, []) do
       {:ok, %{"ok" => true} = result} ->
         after_snap = snapshot_all_live_views()
         diff = diff_live_view_snapshots(before_snap, after_snap)
@@ -1630,8 +1660,7 @@ defmodule LiveAgent.MCP.Tools do
         {:error, "browser: " <> to_string(err)}
 
       {:error, :timeout} ->
-        {:error,
-         "No LiveAgent panel responded. Open the panel in a browser tab and try again."}
+        {:error, panel_timeout_message()}
 
       {:error, reason} ->
         {:error, inspect(reason)}
@@ -1732,7 +1761,7 @@ defmodule LiveAgent.MCP.Tools do
   defp dispatch_browser_command(op, args, formatter, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, 15_000)
 
-    case LiveAgent.CommandQueue.enqueue_and_await(op, args, timeout) do
+    case LiveAgent.CommandQueue.enqueue_and_await(op, args, timeout_ms: timeout) do
       {:ok, %{"ok" => true} = result} ->
         {:ok, formatter.(result)}
 
@@ -1740,11 +1769,36 @@ defmodule LiveAgent.MCP.Tools do
         {:error, "browser: " <> to_string(err)}
 
       {:error, :timeout} ->
-        {:error,
-         "No LiveAgent panel responded. Open the panel in a browser tab and try again."}
+        {:error, panel_timeout_message()}
 
       {:error, reason} ->
         {:error, inspect(reason)}
+    end
+  end
+
+  # Shared diagnostic message for the three browser-bound dispatch paths.
+  # Pulls the latest PanelStatus snapshot so callers see *why* the round-trip
+  # failed (no panel ever opened? panel parked but page mid-reload?) instead
+  # of the old generic "open the panel" prompt.
+  defp panel_timeout_message do
+    snap = LiveAgent.PanelStatus.snapshot()
+
+    base =
+      "LiveAgent panel did not respond in time. " <>
+        "Open the panel in a browser tab and retry, or call get_panel_status to diagnose."
+
+    case snap do
+      %{last_seen_age_ms: nil} ->
+        base <> " (No panel has ever reported in — is the host page loaded?)"
+
+      %{ready: true} ->
+        base <> " (Panel is connected but the command itself timed out.)"
+
+      %{reason: reason, last_seen_age_ms: age} when is_binary(reason) ->
+        base <> " (Panel last seen #{age}ms ago: #{reason}.)"
+
+      %{last_seen_age_ms: age} ->
+        base <> " (Panel last seen #{age}ms ago.)"
     end
   end
 

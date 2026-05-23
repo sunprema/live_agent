@@ -41,6 +41,15 @@
 
   const SCREENSHOT_HISTORY_LIMIT = 12;
 
+  // Per-page-load identifier. Server-side LiveAgent.PanelStatus uses this to
+  // detect "I'm talking to a fresh panel after a reload" — every time this
+  // module loads, it picks a new generation, and the server resets its
+  // first_seen_at to the moment it observes the change.
+  const PANEL_GENERATION =
+    (window.crypto && typeof window.crypto.randomUUID === "function")
+      ? window.crypto.randomUUID()
+      : "p-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+
   try {
     const root = document.getElementById("la-root");
     const storedDrive = localStorage.getItem("la-drive-enabled");
@@ -350,6 +359,48 @@
 
   // ─── Agent Command Loop ────────────────────────────────────────────────────
 
+  // Snapshot the panel/page readiness signals the server cares about.
+  // Used both as a piggyback on /api/commands polls (so the server learns the
+  // panel's state on every long-poll) and as the body of the /api/hello POST
+  // we fire once on boot. Keys mirror PanelStatus.report/1.
+  function readinessParams() {
+    let lvConnected = false;
+    try {
+      lvConnected = !!(window.liveSocket && window.liveSocket.isConnected && window.liveSocket.isConnected());
+    } catch (_) { /* liveSocket might not exist on non-LV pages */ }
+
+    return {
+      gen: PANEL_GENERATION,
+      doc: document.readyState === "complete" ? "1" : "0",
+      lv: lvConnected ? "1" : "0",
+      main: document.querySelector("[data-phx-main]") ? "1" : "0",
+      url: location.pathname + location.search,
+    };
+  }
+
+  function readinessQueryString() {
+    const p = readinessParams();
+    return "?" + Object.keys(p)
+      .map((k) => encodeURIComponent(k) + "=" + encodeURIComponent(p[k]))
+      .join("&");
+  }
+
+  // Fire-and-forget "I'm here" beacon so PanelStatus learns about a new
+  // page-load before the first long-poll completes. Without this, the server
+  // would only learn the panel is back when /api/commands eventually returns
+  // (or hits its 25s timeout), which leaves a measurable readiness gap after
+  // a Phoenix hot-reload.
+  function postHello() {
+    try {
+      fetch(BASE + "/api/hello", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(readinessParams()),
+        keepalive: true,
+      }).catch(() => {});
+    } catch (_) {}
+  }
+
   function setCommandStatus(status) {
     state._commandStatus = status;
     const pill = document.getElementById("la-cmd-pill");
@@ -379,7 +430,7 @@
   function commandPoll() {
     if (!state._commandLoopActive) return;
 
-    fetch(BASE + "/api/commands")
+    fetch(BASE + "/api/commands" + readinessQueryString())
       .then((r) => {
         if (!r.ok) throw new Error("poll status " + r.status);
         return r.json();
@@ -1322,6 +1373,20 @@
     } else if (state.openByDefault) {
       openPanel();
     }
+
+    // Tell the server we're here, even if the panel itself isn't open yet —
+    // command-handling tools (highlight, drive, screenshot) don't require
+    // the panel to be visible, only that the JS bundle is loaded and the
+    // page is hydrated. PanelStatus uses this to short-circuit the readiness
+    // gate in CommandQueue. We re-fire on key transitions so a tab returning
+    // from background or a LiveView page-transition refreshes the signal
+    // promptly instead of waiting for the next 25s long-poll.
+    postHello();
+    window.addEventListener("pageshow", postHello);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") postHello();
+    });
+    window.addEventListener("phx:page-loading-stop", postHello);
   }
 
   // ─── Panel Controls ────────────────────────────────────────────────────────

@@ -331,12 +331,32 @@ defmodule LiveAgent.Router do
   end
 
   # Agent control: long-poll for commands the MCP side has enqueued.
+  # Panel piggybacks its readiness signal via query params (gen, doc, lv,
+  # main, url) so the server always knows whether a panel is parked and
+  # whether the host page is hydrated. See LiveAgent.PanelStatus.
   get "/api/commands" do
+    conn = fetch_query_params(conn)
+    LiveAgent.PanelStatus.report(conn.query_params)
     commands = LiveAgent.CommandQueue.poll()
 
     conn
     |> put_resp_header("content-type", "application/json")
     |> send_resp(200, Jason.encode!(commands))
+    |> halt()
+  end
+
+  # Panel posts this once on init so the server learns the panel is back
+  # before the first long-poll completes. Carries the same readiness fields
+  # as the poll piggyback. Body is permissive — keys we don't recognize are
+  # ignored by PanelStatus.
+  post "/api/hello" do
+    opts = Plug.Parsers.init(parsers: [:json], pass: [], json_decoder: Jason)
+    conn = Plug.Parsers.call(conn, opts)
+    LiveAgent.PanelStatus.report(conn.body_params)
+
+    conn
+    |> put_resp_header("content-type", "application/json")
+    |> send_resp(200, "{\"ok\":true}")
     |> halt()
   end
 

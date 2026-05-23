@@ -10,6 +10,7 @@ defmodule LiveAgent.Application do
       LiveAgent.AsyncInspector,
       LiveAgent.ComponentTreeStore,
       LiveAgent.WatchStore,
+      LiveAgent.PanelStatus,
       LiveAgent.CommandQueue,
       LiveAgent.ErrorStore
     ]

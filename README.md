@@ -78,6 +78,7 @@ Claude Code can call these tools while you work:
 | `watch_assigns`         | Snapshot assigns at this moment (call repeatedly to track changes)              |
 | `get_selected_element`  | Returns the element most recently picked in the browser panel                   |
 | `get_pinned_context`    | Returns the element the user explicitly pinned for Claude                       |
+| `get_panel_status`      | Reports panel readiness — `ready`, `last_seen_age_ms`, `document_ready`, `live_socket_connected`, `root_lv_present`, `generation`, `url`, `reason`. Browser-bound tools auto-wait for readiness; call this when a command timed out to see why. |
 | `get_component_tree`    | LiveComponent tree for the current page — modules, ids, assign keys, events, forms (id + phx-submit/phx-change), named inputs, and buttons with their text and phx-click. Use this before calling `click`/`fill`/`submit` to pick the right target. |
 | `list_ash_resources`    | Lists all Ash resources with attributes, actions, and relationships (Ash only)  |
 | `get_ash_resource_info` | Full introspection of a single Ash resource — types, constraints, actions, etc. |
@@ -121,6 +122,28 @@ Drive is ON. The toggle's state is remembered per browser (localStorage), so
 turning it off is a hard stop you can leave in place. The initial default for
 new browsers can be set with the `drive_default: true` plug option (see
 [Options](#options)) — localStorage still wins once you flip the toggle.
+
+#### Panel readiness
+
+Every browser-bound MCP tool (`click`, `navigate`, `fill`, `submit`,
+`take_screenshot`, `highlight_element`, `inject_css`, …) routes through a
+readiness gate. Before a command is enqueued, the server checks
+`LiveAgent.PanelStatus` and waits briefly (default ~3s, screenshot 6s) for
+the panel to report **all** of:
+
+- the panel JS has reported in recently (it piggybacks on each command poll
+  and fires a `POST /api/hello` on boot)
+- `document.readyState === "complete"`
+- `liveSocket.isConnected()` (or the page has no LiveView at all)
+
+This bridges the gap during a Phoenix hot-reload, first page load, or
+cross-page navigation — calls that previously raced and returned
+`"No LiveAgent panel responded"` now wait until the panel is back and then
+proceed. If the gate times out, the command is still enqueued (the
+regular per-command timeout takes over), and the error message includes
+`last_seen_age_ms` plus a short reason so callers know whether to retry.
+
+Call **`get_panel_status`** any time to read the current snapshot.
 
 #### Demo scripts
 
