@@ -804,6 +804,10 @@ defmodule LiveAgent.MCP.Tools do
           - Trigger state transitions without a UI interaction
           - Verify how assigns change in response to a specific event
 
+        Works on plain LiveViews — it injects the same `"event"` message the JS
+        client sends, so it runs the full handle_event lifecycle without needing
+        any `handle_call/3` shim on the module.
+
         Returns the before/after assigns diff.
         """,
         inputSchema: %{
@@ -812,7 +816,12 @@ defmodule LiveAgent.MCP.Tools do
           properties: %{
             pid: %{type: "string", description: "PID string from list_live_views"},
             event: %{type: "string", description: "The event name passed to handle_event/3"},
-            params: %{type: "object", description: "Params map passed to handle_event/3 (default: {})"}
+            params: %{type: "object", description: "Params map passed to handle_event/3 (default: {})"},
+            type: %{
+              type: "string",
+              description:
+                "Event type, as the JS client tags it (e.g. \"click\", \"keyup\"). Use \"form\" only if params is a URL-encoded string. Default: \"click\"."
+            }
           }
         },
         callback: &send_event/1
@@ -1926,42 +1935,45 @@ defmodule LiveAgent.MCP.Tools do
 
   defp send_event(%{"pid" => pid_string, "event" => event} = args) when is_binary(event) do
     params = Map.get(args, "params", %{})
+    type = Map.get(args, "type", "click")
 
     with {:ok, pid} <- SocketInspector.parse_pid(pid_string),
-         {:ok, before_socket} <- SocketInspector.get_socket(pid) do
-      try do
-        view = before_socket.view
+         {:ok, topic, before_socket} <- SocketInspector.get_topic_and_socket(pid) do
+      # Inject the same `"event"` message the JS client sends, rather than a
+      # `GenServer.call({:run, fn})`. The latter is dispatched to the user's
+      # `handle_event` callbacks fail clause `handle_call/3`, which a plain
+      # LiveView doesn't define — so the call crashes before the handler runs.
+      # A `Phoenix.Socket.Message` routes through the channel's full lifecycle
+      # (telemetry, mount hooks, component dispatch) exactly like a real click.
+      msg = %Phoenix.Socket.Message{
+        topic: topic,
+        event: "event",
+        ref: nil,
+        join_ref: nil,
+        payload: %{"event" => event, "type" => type, "value" => params}
+      }
 
-        result =
-          GenServer.call(
-            pid,
-            {:run, fn socket -> view.handle_event(event, params, socket) end},
-            5_000
-          )
+      mref = Process.monitor(pid)
+      send(pid, msg)
 
-        case result do
-          :ok ->
-            {:ok, after_socket} = SocketInspector.get_socket(pid)
-            diff = assigns_diff(before_socket, after_socket)
-            format_send_event_result(event, diff)
+      # The channel drains its mailbox FIFO, so the `:sys.get_state` issued by
+      # get_socket/1 (sent *after* our event, same process pair) only returns
+      # once handle_event has finished — no arbitrary sleep needed.
+      case SocketInspector.get_socket(pid) do
+        {:ok, after_socket} ->
+          Process.demonitor(mref, [:flush])
+          diff = assigns_diff(before_socket, after_socket)
+          format_send_event_result(event, diff)
 
-          {:ok, reply} ->
-            {:ok, after_socket} = SocketInspector.get_socket(pid)
-            diff = assigns_diff(before_socket, after_socket)
-            format_send_event_result(event, diff, reply)
-
-          other ->
-            {:error, "Unexpected result from LiveView: #{inspect(other)}"}
-        end
-      catch
-        :exit, {:noproc, _} ->
-          {:error, "LiveView process no longer alive."}
-
-        :exit, {:timeout, _} ->
-          {:error, "LiveView did not respond within 5 seconds."}
-
-        kind, reason ->
-          {:error, "handle_event raised: #{Exception.format(kind, reason)}"}
+        {:error, _} ->
+          receive do
+            {:DOWN, ^mref, :process, ^pid, reason} ->
+              {:error, "handle_event crashed the LiveView: #{inspect(reason)}"}
+          after
+            0 ->
+              Process.demonitor(mref, [:flush])
+              {:error, "LiveView process no longer alive."}
+          end
       end
     else
       {:error, reason} -> {:error, reason}

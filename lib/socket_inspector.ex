@@ -227,6 +227,27 @@ defmodule LiveAgent.SocketInspector do
   end
 
   @doc """
+  Returns `{:ok, topic, socket}` for a LiveView channel process, reading both
+  from a single `:sys.get_state/2` call.
+
+  The `topic` is required to inject a client-style `"event"` message into the
+  channel (see `LiveAgent.MCP.Tools.send_event/1`).
+  """
+  def get_topic_and_socket(pid) when is_pid(pid) do
+    try do
+      case :sys.get_state(pid, 2000) do
+        %{topic: topic, socket: %Phoenix.LiveView.Socket{} = socket} when is_binary(topic) ->
+          {:ok, topic, socket}
+
+        _ ->
+          {:error, :not_a_liveview}
+      end
+    catch
+      :exit, _ -> {:error, :process_not_available}
+    end
+  end
+
+  @doc """
   Extracts a sanitized, JSON-serializable assigns map from a Socket struct.
   Drops internal `__`-prefixed keys and converts atoms/structs to plain values.
   """
