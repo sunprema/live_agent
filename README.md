@@ -66,10 +66,11 @@ Claude Code can call these tools while you work:
 
 | Tool                    | Description                                                                     |
 | ----------------------- | ------------------------------------------------------------------------------- |
-| `list_live_views`       | Lists all active LiveView processes (PID, view module, assign keys)             |
+| `list_live_views`       | Lists all active LiveView processes (PID, view module, assign keys). Marks the **connected root** — the live view on screen — and sorts it first, so follow-up tools (incl. after an `act_as` reload) target the right PID. |
 | `get_assigns`           | Returns the full assigns map for a LiveView — the live data on screen           |
 | `get_assign`            | Returns a single assign value by key                                            |
 | `get_socket_info`       | Returns full socket metadata (view, IDs, transport, assigns)                    |
+| `get_scope`             | Returns the security scope bound to a LiveView — actor (current user), tenant/organization, and Ash scope context. Call before any `project_eval`/SQL on tenant-scoped data so the query reproduces the user's exact authorization boundary. |
 | `get_state_history`     | Recent assigns transitions for a LiveView — trigger, diff, duration, exception. Answers "why did X change?" without re-running the flow. |
 | `get_state_event`       | Full diff for one timeline entry by id (drill into `get_state_history` results) |
 | `list_async_tasks`      | "What's loading right now" for a LiveView — pending `start_async`/`assign_async` tasks and any `%AsyncResult{}` values in assigns |
@@ -88,7 +89,13 @@ Claude Code can call these tools while you work:
 | `navigate`              | Navigates the browser to a path. Modes: `auto` (default — resolves via the host router: `patch` for same-LV with `handle_params/3`, `navigate` for cross-LV or LVs without `handle_params/3`, `href` for non-LV routes), `patch`, `navigate`, `href`. Requires **Drive** ON. |
 | `fill`                  | Sets a form input's value and dispatches `input`+`change` (so `phx-change` fires). Handles text/select/textarea, checkboxes, radios, and contenteditable. Requires **Drive** ON. |
 | `submit`                | Submits a form via `form.requestSubmit()` (triggers `phx-submit` + HTML5 validation). Target can be the form or any element inside it. Requires **Drive** ON. |
+| `act_as`                | Logs the browser session in as a chosen user/persona so the driving tools then run **as that actor** — the one-call alternative to the login dance, built for testing org isolation. Returns the reconnected scope. Dev/test only; requires a `:act_as` closure + `:session_options` config and **Drive** ON. |
 | `wait_for`              | Blocks until a condition is met. Modes: `{assign: {pid, key, equals?}}` polls a LiveView assign server-side (panel not required); `{selector}` / `{text}` use a browser MutationObserver. Default `timeout_ms` 5000. |
+| `take_screenshot`       | Captures the browser to a PNG in `/tmp`. Optionally clip to one element by `selector` / `cid` / `text`; the result reports the captured rect. The panel UI is excluded. |
+| `screenshot_baseline`   | Captures now and saves it as a named baseline under `screenshots/baselines/<name>.png` — the "before" for a visual diff. Honors the same element-clip args. |
+| `screenshot_diff`       | Compares the current screen to a named baseline and returns `changed_ratio`, merged `changed_boxes`, `dims_match?`, and an `overlay_path` (baseline with changed pixels tinted red) instead of two full images. AA-aware; tune via `threshold` / `include_aa`. |
+| `expect_assign`         | Assertion sibling of `get_assign`: returns `{pass, path, expected, actual, waited_ms}` for an assign (dot-path supported) via `equals` or `matches`, instead of dumping state to eyeball. `timeout_ms > 0` polls until it passes (async settle); a failure is `pass: false`, not an error. |
+| `expect_no_errors`      | Assertion gate over the error log — `pass` only if no errors recorded (optionally since a `since_id`). Pattern: `clear_errors` → act → `expect_no_errors`. Returns `{pass, count, errors}`. |
 
 ### Agent controls
 
@@ -106,6 +113,7 @@ you can see and stop anything Claude does.
 
 - Read-only: `highlight_element`, `clear_highlight`
 - Drive: `click`, `navigate`, `fill`, `submit`, `wait_for`
+- Drive (impersonation, dev-only): `act_as` — see [Acting as a user](#acting-as-a-user-act_as)
 
 **Status dot** — top-right of the panel bar:
 
@@ -169,6 +177,76 @@ server-side assigns diff in the response (which already includes the change to
 Claude chains `navigate` → `click` → `fill` → `submit`, with `wait_for` in
 between when needed. Each step returns URL/flash/assigns-diff so Claude can
 notice and report a validation error or unexpected redirect.
+
+#### Acting as a user (`act_as`)
+
+`act_as` lands the panel's browser session authenticated as a chosen
+user/persona in one call, so the driving tools then exercise the app **as that
+actor** — instead of filling a login form by hand every session. Its headline
+use is testing multi-tenant **org isolation**.
+
+> "Make sure an org B admin can't see org A's patient. Act as
+> `orgb-admin@example.com`, then open `/patients/<orgA-id>`."
+
+Claude calls `act_as("orgb-admin@example.com")` (the page reloads and reconnects
+authenticated; the tool returns the new actor/tenant scope so it confirms who it
+became), then `navigate`s to org A's record and reads the expected forbidden /
+404. `act_as("orga-admin@example.com")` → same URL → the record renders.
+
+**This is privileged and dev-only.** Four independent locks, none present in a
+prod build:
+
+1. **Build**: depend on live_agent with `only: :dev` and the route/tool don't
+   even compile in prod.
+2. **Env gate**: `act_as` runs only in `:dev`/`:test`.
+3. **App-supplied closure**: live-agent never mints sessions itself — you must
+   provide an `:act_as` function that signs a user in. Absent it, `act_as`
+   returns a precise error.
+4. **Drive toggle**: like `click`/`fill`, `act_as` refuses unless **Drive** is ON.
+
+**Configuration** (dev only). `act_as` needs two config keys — the sign-in
+closure and a verbatim copy of your endpoint's session options:
+
+```elixir
+# config/dev.exs
+config :live_agent,
+  # ⚠ Copy :session_options VERBATIM from your endpoint's @session_options
+  # (same key + signing_salt + same_site). A salt mismatch does NOT error — it
+  # silently fails to authenticate after the reload, because the reconnecting
+  # LiveSocket can't decode a cookie signed with a different salt.
+  session_options: [store: :cookie, key: "_my_app_key", signing_salt: "...", same_site: "Lax"],
+  act_as: &MyAppWeb.DevActAs.sign_in/2
+```
+
+```elixir
+# lib/my_app_web/dev_act_as.ex — keep the privileged code greppable, in lib/.
+defmodule MyAppWeb.DevActAs do
+  @moduledoc "Dev-only: mint a real session for an arbitrary user so live-agent can drive as them."
+  import AshAuthentication.Phoenix.Plug, only: [store_in_session: 2]
+
+  # `identifier` is whatever you passed to act_as, verbatim (here: an email).
+  def sign_in(conn, identifier) do
+    user = Ash.get!(MyApp.Accounts.User, %{email: identifier}, action: :get_by_email, authorize?: false)
+    store_in_session(conn, user)   # exactly what your AuthController does after a real login
+  end
+end
+```
+
+Notes:
+
+- The closure just calls your app's existing sign-in primitive on the `conn` and
+  returns it — **no `fetch_session`/session plumbing**. live-agent sets the
+  session up from `:session_options` before calling you (because `plug LiveAgent`
+  mounts before `Plug.Session`, the `/live_agent/act_as` request would otherwise
+  arrive with no session), so `put_session` / `store_in_session` work verbatim
+  and the cookie is written back.
+- Resolve the user with `authorize?: false` — there's no actor yet (that's the
+  point), so a normal scoped read would refuse. Same posture as a seed script.
+- **Don't thread the tenant through the closure.** The closure mints the
+  *actor*; your app's own `on_mount`/scope-resolution derives the *tenant* when
+  the socket reconnects. That's why org isolation needs no extra wiring.
+- A closure that raises (e.g. user not found) returns a clean error — never a
+  half-authenticated state.
 
 ---
 
@@ -371,6 +449,50 @@ No configuration needed — LiveAgent scans all loaded BEAM modules at runtime t
 
 The tree is parsed from the last HTML response LiveAgent intercepted. Navigate to the page you want to inspect first.
 
+### Via visual regression (screenshot diffs)
+
+The design-system loop — screenshot, eyeball, tweak CSS, screenshot again — gets
+a real *comparison* primitive instead of asking Claude to diff two full-page PNGs
+by eye:
+
+1. **Mark a baseline.** _"Snapshot the cart card as `cart`."_ → Claude calls
+   `screenshot_baseline(name: "cart", selector: ".cart")`. The capture is saved to
+   `screenshots/baselines/cart.png`.
+2. **Make the change.** Edit the CSS / markup (or have Claude `inject_css`).
+3. **Diff it.** _"Did that touch only the cart?"_ → Claude calls
+   `screenshot_diff(name: "cart", selector: ".cart")` and gets back:
+
+   ```json
+   {
+     "changed_ratio": 0.037,
+     "changed_boxes": [{ "x": 12, "y": 80, "w": 220, "h": 64 }],
+     "dims_match?": true,
+     "overlay_path": "screenshots/diffs/cart.png",
+     "baseline_path": "screenshots/baselines/cart.png"
+   }
+   ```
+
+   The overlay at `overlay_path` is the baseline with changed pixels tinted red —
+   Read it to see the change. `changed_boxes` are the merged dirty regions, so
+   Claude can tell at a glance whether the change stayed inside the card.
+
+**Element clipping** — pass `selector` / `cid` / `text` to `take_screenshot`,
+`screenshot_baseline`, and `screenshot_diff` to capture just one component, so the
+relevant 400×200 region isn't buried in a 1440×3000 full-page shot. Use the *same*
+clip for the baseline and the diff so their dimensions line up — if the page
+reflowed and the sizes differ, `screenshot_diff` returns `dims_match?: false` with
+both sizes rather than a bogus ratio.
+
+**Anti-aliasing** — diffing uses [`pixelmatch`](https://github.com/mapbox/pixelmatch)
+(vendored into the panel JS, so it works offline), which detects and ignores
+sub-pixel rendering noise by default, so `changed_ratio` reflects real changes. Tune
+sensitivity with `threshold` (0–1 colour distance, default `0.1`) or count AA pixels
+with `include_aa: true`.
+
+Baselines and diffs are written under `screenshots/` in your project root (where
+`mix phx.server` runs), so they survive across MCP calls and panel reconnects.
+Re-using a baseline name overwrites it.
+
 ### Via assigns inspection
 
 Ask Claude things like:
@@ -381,6 +503,54 @@ Ask Claude things like:
 - _"What's the value of the `:current_user` assign?"_
 
 Claude calls `list_live_views` to find the right process, then `get_assigns` to read the data.
+
+### Via the scope inspector
+
+In a multi-tenant Ash app, the most error-prone part of evaluating a query by
+hand is reconstructing *who the user is* — their actor, tenant, and scope —
+so the call returns what they actually see. `get_scope` hands Claude that
+context straight from the live socket:
+
+- _"Who is the user on this LiveView, and what org are they scoped to?"_ →
+  Claude calls `get_scope` and reports the sanitized
+  `actor` / `tenant` / `context` instead of grepping the assigns dump.
+- _"Would this read leak across orgs? Run it as the logged-in user."_ →
+  Claude calls `get_scope`, binds the returned actor + tenant into its
+  `project_eval`, and reproduces the user's exact authorization boundary —
+  rather than `authorize?: false` or a hand-built scope that doesn't match.
+
+Resolution is heuristic (`current_scope`, `current_user` + `__tenant__`,
+`current_organization`, …); point it at a custom key with the
+`scope_assign_keys` plug option. A result with `raw_present: false` means the
+LiveView simply has no scope assign — not that the lookup failed.
+
+### Via assertions (pass / fail, not just state)
+
+`expect_assign` and `expect_no_errors` turn "read the state and judge it" into an
+explicit verdict — tighter verify loops, and a real assertion for the `verify`
+skill to hang on:
+
+- _"Confirm the alert flipped to red."_ → `expect_assign(pid, key: "alert.level",
+  equals: "emergency")` returns `{ "pass": true, ... }`, or
+  `{ "pass": false, "actual": "yellow", "expected": { "equals": "emergency" } }` —
+  no 350k-char dump to scan. `key` is a dot-path, so nested maps/structs work.
+- _"Wait for the async load to finish, then check it."_ → add `timeout_ms: 3000`
+  and `expect_assign` polls until it passes or the time elapses (same bound as
+  `wait_for`), so an assign that hasn't settled yet doesn't read as a spurious
+  failure.
+- _"Did that click break anything?"_ → the gate pattern:
+
+  ```
+  clear_errors  →  click "Save"  →  expect_no_errors
+  ```
+
+  `expect_no_errors` returns `{ "pass": true }`, or the captured browser/server
+  errors with a count. Pass a `since_id` from an earlier `get_errors` instead of
+  `clear_errors` if you'd rather not reset the log.
+
+`equals` does a typed compare for scalars (with a stringified fallback, so
+`equals: "5"` also matches the integer `5`); `matches` tests a regex — or a plain
+substring — against the stringified value.
 
 ### Via the state timeline
 
@@ -425,6 +595,7 @@ For "what's loading right now" and "what async work just finished":
 | `allow_remote_access` | `false` | Allow connections from non-localhost IPs. Leave `false` in dev. |
 | `drive_default`       | `false` | Default for the **Drive** toggle on first visit (no localStorage entry yet). Once the user flips the toggle, their stored preference wins. |
 | `open_default`        | `false` | If `true`, the panel auto-opens on page load instead of starting collapsed behind the floating **⚡ LA** button. Persisted per browser — once the user closes the panel, that choice is remembered. |
+| `scope_assign_keys`   | `[]`    | Extra assign keys (atoms) that `get_scope` should treat as the security scope, tried before the built-in heuristics. Use when your app stores scope under a custom key, e.g. `scope_assign_keys: [:current_membership]`. |
 
 ```elixir
 plug LiveAgent, allow_remote_access: false, drive_default: true, open_default: true

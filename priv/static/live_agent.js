@@ -598,6 +598,8 @@
     submit: cmdSubmit,
     wait_for: cmdWaitFor,
     screenshot: cmdScreenshot,
+    screenshot_diff: cmdScreenshotDiff,
+    act_as: cmdActAs,
     inject_css: cmdInjectCss,
     revert_css: cmdRevertCss,
     scroll_to: cmdScrollTo,
@@ -605,7 +607,7 @@
   };
 
   // Ops that mutate the page; gated behind the Drive toggle.
-  const driveOps = new Set(["click", "navigate", "fill", "submit"]);
+  const driveOps = new Set(["click", "navigate", "fill", "submit", "act_as"]);
 
   // ─── Highlight overlay ─────────────────────────────────────────────────────
 
@@ -1091,6 +1093,38 @@
     }));
   }
 
+  // Impersonation: POST the identifier to the dev-only act_as route (which calls
+  // the app's sign-in closure and writes the session cookie), then reload so the
+  // LiveSocket reconnects authenticated. We post the command result first and
+  // reload on a short delay so the result reaches the server before navigation
+  // tears the page down (same race the href-navigate path relies on). The MCP
+  // tool confirms the new actor server-side by reading the reconnected scope.
+  async function cmdActAs(args) {
+    const identifier = args && args.identifier;
+    if (!identifier) throw new Error("act_as requires an 'identifier'");
+
+    const res = await fetch(BASE + "/act_as", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ identifier }),
+    });
+
+    let data = {};
+    try {
+      data = await res.json();
+    } catch (_e) {
+      // fall through to the status check below
+    }
+
+    if (!res.ok || data.ok === false) {
+      throw new Error(data.error || "act_as failed (HTTP " + res.status + ")");
+    }
+
+    setTimeout(() => window.location.reload(), 100);
+    return { who: data.who, note: "Session set; reloading to reconnect as the new actor." };
+  }
+
   // ─── Screenshot ───────────────────────────────────────────────────────────
   //
   // Primary fix: html2canvas-pro is the maintained fork of html2canvas with
@@ -1272,49 +1306,426 @@
     }
   }
 
-  async function cmdScreenshot({ selector } = {}) {
-    // html2canvas-pro exposes the same window.html2canvas global as the
-    // original lib, so existing callsites keep working. If the user already
-    // loaded a non-pro build, we leave it alone — the patcher above is the
-    // safety net for that case.
-    if (!window.html2canvas) {
-      await new Promise((resolve, reject) => {
-        const s = document.createElement("script");
-        s.src = "https://cdn.jsdelivr.net/npm/html2canvas-pro@1.5.10/dist/html2canvas-pro.min.js";
-        s.onload = resolve;
-        s.onerror = () => reject(new Error("Failed to load html2canvas-pro"));
-        document.head.appendChild(s);
-      });
-    }
-    const target = selector ? document.querySelector(selector) : document.documentElement;
-    if (!target) throw new Error("No element found for selector: " + selector);
+  // html2canvas-pro exposes the same window.html2canvas global as the
+  // original lib, so existing callsites keep working. If the user already
+  // loaded a non-pro build, we leave it alone — the patcher above is the
+  // safety net for that case.
+  async function ensureHtml2Canvas() {
+    if (window.html2canvas) return;
+    await new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = "https://cdn.jsdelivr.net/npm/html2canvas-pro@1.5.10/dist/html2canvas-pro.min.js";
+      s.onload = resolve;
+      s.onerror = () => reject(new Error("Failed to load html2canvas-pro"));
+      document.head.appendChild(s);
+    });
+  }
 
+  // Resolves a capture target from {cid|selector|text}. An explicit target
+  // that matches nothing is an error (so the caller knows the clip failed);
+  // with no target given we capture the whole document.
+  function resolveCaptureTarget(args) {
+    const explicit = args && (args.cid != null || args.selector || args.text);
+    if (!explicit) return { el: document.documentElement, clipped: false };
+    const matches = resolveTarget(args);
+    if (!matches || matches.length === 0) {
+      throw new Error("No element found for capture target: " + JSON.stringify(args));
+    }
+    return { el: matches[0], clipped: true };
+  }
+
+  // The single capture path shared by take_screenshot, screenshot_baseline,
+  // and screenshot_diff — so palette handling (oklch) and clipping stay
+  // identical across all three. Returns the html2canvas canvas plus the
+  // captured rect (null for a full-page capture).
+  async function captureCanvas(args = {}) {
+    await ensureHtml2Canvas();
+    const { el, clipped } = resolveCaptureTarget(args);
     const patches = patchStylesheetsForCapture();
     try {
-      const canvas = await window.html2canvas(target, {
+      const canvas = await window.html2canvas(el, {
         useCORS: true,
         allowTaint: true,
         logging: false,
-        ignoreElements: (el) => el.id === "la-root",
+        ignoreElements: (e) => e.id === "la-root",
       });
-      const dataUrl = canvas.toDataURL("image/png");
-      const base64 = dataUrl.replace(/^data:image\/png;base64,/, "");
-      recordScreenshot({
-        dataUrl,
-        width: canvas.width,
-        height: canvas.height,
-        selector: selector || null,
-      });
-      return {
-        ok: true,
-        base64,
-        width: canvas.width,
-        height: canvas.height,
-        oklch_patches: patches.length,
-      };
+      let rect = null;
+      if (clipped) {
+        const r = el.getBoundingClientRect();
+        rect = {
+          x: Math.round(r.left),
+          y: Math.round(r.top),
+          width: Math.round(r.width),
+          height: Math.round(r.height),
+        };
+      }
+      return { canvas, rect, oklch_patches: patches.length };
     } finally {
       revertStylesheetPatches(patches);
     }
+  }
+
+  async function cmdScreenshot(args = {}) {
+    const { canvas, rect, oklch_patches } = await captureCanvas(args);
+    const dataUrl = canvas.toDataURL("image/png");
+    const base64 = dataUrl.replace(/^data:image\/png;base64,/, "");
+    recordScreenshot({
+      dataUrl,
+      width: canvas.width,
+      height: canvas.height,
+      selector: args.selector || (args.cid != null ? "[cid=" + args.cid + "]" : null),
+    });
+    return {
+      ok: true,
+      base64,
+      width: canvas.width,
+      height: canvas.height,
+      rect,
+      oklch_patches,
+    };
+  }
+
+  // ─── Visual diff (pixelmatch) ───────────────────────────────────────────────
+  //
+  // pixelmatch is the diff engine — a tiny, zero-dependency lib with built-in
+  // anti-aliasing detection, so sub-pixel render noise doesn't inflate the
+  // changed ratio. Vendored inline (verbatim from pixelmatch@5.3.0, ISC
+  // license, https://github.com/mapbox/pixelmatch) so the diff works offline
+  // with no CDN fetch at diff time. The only adaptation is dropping the
+  // CommonJS `module.exports` wrapper.
+
+  const pixelmatchDefaults = {
+    threshold: 0.1,
+    includeAA: false,
+    alpha: 0.1,
+    aaColor: [255, 255, 0],
+    diffColor: [255, 0, 0],
+    diffColorAlt: null,
+    diffMask: false,
+  };
+
+  function pixelmatch(img1, img2, output, width, height, options) {
+    if (!pmIsPixelData(img1) || !pmIsPixelData(img2) || (output && !pmIsPixelData(output)))
+      throw new Error("Image data: Uint8Array, Uint8ClampedArray or Buffer expected.");
+
+    if (img1.length !== img2.length || (output && output.length !== img1.length))
+      throw new Error("Image sizes do not match.");
+
+    if (img1.length !== width * height * 4)
+      throw new Error("Image data size does not match width/height.");
+
+    options = Object.assign({}, pixelmatchDefaults, options);
+
+    const len = width * height;
+    const a32 = new Uint32Array(img1.buffer, img1.byteOffset, len);
+    const b32 = new Uint32Array(img2.buffer, img2.byteOffset, len);
+    let identical = true;
+
+    for (let i = 0; i < len; i++) {
+      if (a32[i] !== b32[i]) {
+        identical = false;
+        break;
+      }
+    }
+    if (identical) {
+      if (output && !options.diffMask) {
+        for (let i = 0; i < len; i++) pmDrawGrayPixel(img1, 4 * i, options.alpha, output);
+      }
+      return 0;
+    }
+
+    const maxDelta = 35215 * options.threshold * options.threshold;
+    let diff = 0;
+
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const pos = (y * width + x) * 4;
+        const delta = pmColorDelta(img1, img2, pos, pos);
+
+        if (Math.abs(delta) > maxDelta) {
+          if (!options.includeAA && (pmAntialiased(img1, x, y, width, height, img2) ||
+                                     pmAntialiased(img2, x, y, width, height, img1))) {
+            if (output && !options.diffMask) pmDrawPixel(output, pos, ...options.aaColor);
+          } else {
+            if (output) {
+              pmDrawPixel(output, pos, ...((delta < 0 && options.diffColorAlt) || options.diffColor));
+            }
+            diff++;
+          }
+        } else if (output) {
+          if (!options.diffMask) pmDrawGrayPixel(img1, pos, options.alpha, output);
+        }
+      }
+    }
+
+    return diff;
+  }
+
+  function pmIsPixelData(arr) {
+    return ArrayBuffer.isView(arr) && arr.constructor.BYTES_PER_ELEMENT === 1;
+  }
+
+  function pmAntialiased(img, x1, y1, width, height, img2) {
+    const x0 = Math.max(x1 - 1, 0);
+    const y0 = Math.max(y1 - 1, 0);
+    const x2 = Math.min(x1 + 1, width - 1);
+    const y2 = Math.min(y1 + 1, height - 1);
+    const pos = (y1 * width + x1) * 4;
+    let zeroes = x1 === x0 || x1 === x2 || y1 === y0 || y1 === y2 ? 1 : 0;
+    let min = 0;
+    let max = 0;
+    let minX, minY, maxX, maxY;
+
+    for (let x = x0; x <= x2; x++) {
+      for (let y = y0; y <= y2; y++) {
+        if (x === x1 && y === y1) continue;
+
+        const delta = pmColorDelta(img, img, pos, (y * width + x) * 4, true);
+
+        if (delta === 0) {
+          zeroes++;
+          if (zeroes > 2) return false;
+        } else if (delta < min) {
+          min = delta;
+          minX = x;
+          minY = y;
+        } else if (delta > max) {
+          max = delta;
+          maxX = x;
+          maxY = y;
+        }
+      }
+    }
+
+    if (min === 0 || max === 0) return false;
+
+    return (pmHasManySiblings(img, minX, minY, width, height) && pmHasManySiblings(img2, minX, minY, width, height)) ||
+           (pmHasManySiblings(img, maxX, maxY, width, height) && pmHasManySiblings(img2, maxX, maxY, width, height));
+  }
+
+  function pmHasManySiblings(img, x1, y1, width, height) {
+    const x0 = Math.max(x1 - 1, 0);
+    const y0 = Math.max(y1 - 1, 0);
+    const x2 = Math.min(x1 + 1, width - 1);
+    const y2 = Math.min(y1 + 1, height - 1);
+    const pos = (y1 * width + x1) * 4;
+    let zeroes = x1 === x0 || x1 === x2 || y1 === y0 || y1 === y2 ? 1 : 0;
+
+    for (let x = x0; x <= x2; x++) {
+      for (let y = y0; y <= y2; y++) {
+        if (x === x1 && y === y1) continue;
+
+        const pos2 = (y * width + x) * 4;
+        if (img[pos] === img[pos2] &&
+            img[pos + 1] === img[pos2 + 1] &&
+            img[pos + 2] === img[pos2 + 2] &&
+            img[pos + 3] === img[pos2 + 3]) zeroes++;
+
+        if (zeroes > 2) return true;
+      }
+    }
+
+    return false;
+  }
+
+  function pmColorDelta(img1, img2, k, m, yOnly) {
+    let r1 = img1[k + 0];
+    let g1 = img1[k + 1];
+    let b1 = img1[k + 2];
+    let a1 = img1[k + 3];
+
+    let r2 = img2[m + 0];
+    let g2 = img2[m + 1];
+    let b2 = img2[m + 2];
+    let a2 = img2[m + 3];
+
+    if (a1 === a2 && r1 === r2 && g1 === g2 && b1 === b2) return 0;
+
+    if (a1 < 255) {
+      a1 /= 255;
+      r1 = pmBlend(r1, a1);
+      g1 = pmBlend(g1, a1);
+      b1 = pmBlend(b1, a1);
+    }
+
+    if (a2 < 255) {
+      a2 /= 255;
+      r2 = pmBlend(r2, a2);
+      g2 = pmBlend(g2, a2);
+      b2 = pmBlend(b2, a2);
+    }
+
+    const y1 = pmRgb2y(r1, g1, b1);
+    const y2 = pmRgb2y(r2, g2, b2);
+    const y = y1 - y2;
+
+    if (yOnly) return y;
+
+    const i = pmRgb2i(r1, g1, b1) - pmRgb2i(r2, g2, b2);
+    const q = pmRgb2q(r1, g1, b1) - pmRgb2q(r2, g2, b2);
+
+    const delta = 0.5053 * y * y + 0.299 * i * i + 0.1957 * q * q;
+
+    return y1 > y2 ? -delta : delta;
+  }
+
+  function pmRgb2y(r, g, b) { return r * 0.29889531 + g * 0.58662247 + b * 0.11448223; }
+  function pmRgb2i(r, g, b) { return r * 0.59597799 - g * 0.27417610 - b * 0.32180189; }
+  function pmRgb2q(r, g, b) { return r * 0.21147017 - g * 0.52261711 + b * 0.31114694; }
+
+  function pmBlend(c, a) {
+    return 255 + (c - 255) * a;
+  }
+
+  function pmDrawPixel(output, pos, r, g, b) {
+    output[pos + 0] = r;
+    output[pos + 1] = g;
+    output[pos + 2] = b;
+    output[pos + 3] = 255;
+  }
+
+  function pmDrawGrayPixel(img, i, alpha, output) {
+    const r = img[i + 0];
+    const g = img[i + 1];
+    const b = img[i + 2];
+    const val = pmBlend(pmRgb2y(r, g, b), (alpha * img[i + 3]) / 255);
+    pmDrawPixel(output, i, val, val, val);
+  }
+
+  // Decodes a base64 PNG into ImageData via an offscreen canvas.
+  function pngBase64ToImageData(base64) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        const c = document.createElement("canvas");
+        c.width = img.naturalWidth;
+        c.height = img.naturalHeight;
+        const ctx = c.getContext("2d");
+        ctx.drawImage(img, 0, 0);
+        resolve(ctx.getImageData(0, 0, c.width, c.height));
+      };
+      img.onerror = () => reject(new Error("failed to decode baseline PNG"));
+      img.src = "data:image/png;base64," + base64;
+    });
+  }
+
+  // Merges the changed (red-tinted) pixels of a pixelmatch diff buffer into a
+  // small set of bounding boxes. Works on a coarse 16px occupancy grid and
+  // connected-components over it — bounded regardless of image size.
+  function mergeDiffBoxes(out, w, h) {
+    const cell = 16;
+    const cols = Math.ceil(w / cell);
+    const rows = Math.ceil(h / cell);
+    const occ = new Uint8Array(cols * rows);
+
+    for (let y = 0; y < h; y++) {
+      const rowBase = y * w;
+      const gy = ((y / cell) | 0) * cols;
+      for (let x = 0; x < w; x++) {
+        const i = (rowBase + x) * 4;
+        // pixelmatch paints counted-different pixels in the diff color (red);
+        // anti-aliased / unchanged pixels are dimmed grey or yellow.
+        if (out[i] > 200 && out[i + 1] < 100 && out[i + 2] < 100) {
+          occ[gy + ((x / cell) | 0)] = 1;
+        }
+      }
+    }
+
+    const seen = new Uint8Array(cols * rows);
+    const boxes = [];
+    const stack = [];
+    for (let start = 0; start < occ.length; start++) {
+      if (!occ[start] || seen[start]) continue;
+      let minC = cols, maxC = 0, minR = rows, maxR = 0;
+      stack.push(start);
+      seen[start] = 1;
+      while (stack.length) {
+        const idx = stack.pop();
+        const c = idx % cols;
+        const r = (idx / cols) | 0;
+        if (c < minC) minC = c;
+        if (c > maxC) maxC = c;
+        if (r < minR) minR = r;
+        if (r > maxR) maxR = r;
+        const neighbors = [idx - 1, idx + 1, idx - cols, idx + cols];
+        for (const n of neighbors) {
+          if (n < 0 || n >= occ.length || seen[n] || !occ[n]) continue;
+          // guard horizontal wrap-around at row edges
+          if ((n === idx - 1 && c === 0) || (n === idx + 1 && c === cols - 1)) continue;
+          seen[n] = 1;
+          stack.push(n);
+        }
+      }
+      boxes.push({
+        x: minC * cell,
+        y: minR * cell,
+        w: Math.min((maxC - minC + 1) * cell, w - minC * cell),
+        h: Math.min((maxR - minR + 1) * cell, h - minR * cell),
+      });
+    }
+
+    // Cap the box count so a speckled diff doesn't return hundreds of regions.
+    if (boxes.length > 40) {
+      let x0 = w, y0 = h, x1 = 0, y1 = 0;
+      for (const b of boxes) {
+        x0 = Math.min(x0, b.x);
+        y0 = Math.min(y0, b.y);
+        x1 = Math.max(x1, b.x + b.w);
+        y1 = Math.max(y1, b.y + b.h);
+      }
+      return [{ x: x0, y: y0, w: x1 - x0, h: y1 - y0 }];
+    }
+    return boxes;
+  }
+
+  async function cmdScreenshotDiff(args = {}) {
+    const baselineB64 = args.baseline_png;
+    if (!baselineB64) throw new Error("screenshot_diff: missing baseline_png");
+
+    const baseline = await pngBase64ToImageData(baselineB64);
+
+    // Capture the current frame through the SAME path as the baseline.
+    const { canvas } = await captureCanvas(args);
+    const w = canvas.width;
+    const h = canvas.height;
+
+    if (baseline.width !== w || baseline.height !== h) {
+      return {
+        ok: true,
+        dims_match: false,
+        baseline_size: { width: baseline.width, height: baseline.height },
+        current_size: { width: w, height: h },
+      };
+    }
+
+    const ctx = canvas.getContext("2d");
+    const current = ctx.getImageData(0, 0, w, h);
+    const out = new ImageData(w, h);
+
+    const changed = pixelmatch(baseline.data, current.data, out.data, w, h, {
+      threshold: typeof args.threshold === "number" ? args.threshold : 0.1,
+      includeAA: args.include_aa === true,
+      diffColor: [255, 0, 0],
+      alpha: 0.1,
+    });
+
+    const boxes = mergeDiffBoxes(out.data, w, h);
+
+    const overlay = document.createElement("canvas");
+    overlay.width = w;
+    overlay.height = h;
+    overlay.getContext("2d").putImageData(out, 0, 0);
+    const diffB64 = overlay.toDataURL("image/png").replace(/^data:image\/png;base64,/, "");
+
+    return {
+      ok: true,
+      dims_match: true,
+      changed_ratio: changed / (w * h),
+      changed_boxes: boxes,
+      width: w,
+      height: h,
+      diff_png: diffB64,
+    };
   }
 
   function recordScreenshot({ dataUrl, width, height, selector }) {

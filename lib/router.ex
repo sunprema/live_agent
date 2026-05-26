@@ -432,9 +432,103 @@ defmodule LiveAgent.Router do
     end
   end
 
+  # Agent control: dev-only impersonation. The panel POSTs {identifier} here;
+  # live-agent sets up the session from :session_options (because `plug LiveAgent`
+  # mounts before Plug.Session, so this forward skipped it), then calls the
+  # app-supplied :act_as closure to write the session, and sends the closure's
+  # conn so the cookie is written back. The panel then reloads to reconnect as
+  # the new actor. Three locks: env gate + required closure + Drive toggle
+  # (enforced browser-side, like other drive ops).
+  post "/act_as" do
+    if LiveAgent.Config.act_as_enabled?() do
+      opts = Plug.Parsers.init(parsers: [:json], pass: [], json_decoder: Jason)
+      conn = Plug.Parsers.call(conn, opts)
+      handle_act_as(conn, Map.get(conn.body_params, "identifier"))
+    else
+      conn
+      |> put_resp_header("content-type", "application/json")
+      |> send_resp(403, Jason.encode!(%{ok: false, error: "act_as is available only in :dev/:test builds."}))
+      |> halt()
+    end
+  end
+
   match "/*_ignored" do
     conn
     |> send_resp(404, "Not Found")
+    |> halt()
+  end
+
+  defp handle_act_as(conn, identifier) when is_binary(identifier) and identifier != "" do
+    with {:ok, fun} <- LiveAgent.Config.act_as_fun(),
+         {:ok, session_opts} <- LiveAgent.Config.session_options() do
+      do_act_as(conn, identifier, fun, session_opts)
+    else
+      {:error, reason} -> act_as_config_error(conn, reason)
+    end
+  end
+
+  defp handle_act_as(conn, _identifier) do
+    conn
+    |> put_resp_header("content-type", "application/json")
+    |> send_resp(400, Jason.encode!(%{ok: false, error: "act_as requires a non-empty 'identifier'."}))
+    |> halt()
+  end
+
+  defp do_act_as(conn, identifier, fun, session_opts) do
+    # Establish the session before the closure so it can call put_session /
+    # store_in_session verbatim, and so the cookie is re-encoded on send. Skip
+    # if the host happened to mount us after Plug.Session (already fetched).
+    conn =
+      if match?(%{plug_session_fetch: _}, conn.private) do
+        conn
+      else
+        conn
+        |> Plug.Session.call(Plug.Session.init(session_opts))
+        |> fetch_session()
+      end
+
+    signed_conn = fun.(conn, identifier)
+
+    unless match?(%Plug.Conn{}, signed_conn) do
+      raise "the :act_as closure must return a %Plug.Conn{}, got: #{inspect(signed_conn)}"
+    end
+
+    LiveAgent.EventStore.push_custom(%{
+      type: "act_as",
+      action: "impersonate",
+      event: identifier,
+      params: %{"identifier" => identifier}
+    })
+
+    signed_conn
+    |> put_resp_header("content-type", "application/json")
+    |> send_resp(200, Jason.encode!(%{ok: true, who: identifier}))
+    |> halt()
+  rescue
+    e ->
+      # A raising closure (e.g. user not found) must surface as a clean error,
+      # never a half-written session.
+      conn
+      |> put_resp_header("content-type", "application/json")
+      |> send_resp(422, Jason.encode!(%{ok: false, error: "act_as closure failed: #{Exception.message(e)}"}))
+      |> halt()
+  end
+
+  defp act_as_config_error(conn, reason) do
+    msg =
+      case reason do
+        :not_configured ->
+          "act_as is not configured. Set both in config/dev.exs: " <>
+            "`config :live_agent, act_as: &MyAppWeb.DevActAs.sign_in/2, " <>
+            "session_options: [...]` — copy :session_options VERBATIM from your endpoint's @session_options."
+
+        :bad_arity ->
+          "config :live_agent, act_as must be a 2-arity function `fn conn, identifier -> ... end`."
+      end
+
+    conn
+    |> put_resp_header("content-type", "application/json")
+    |> send_resp(400, Jason.encode!(%{ok: false, error: msg}))
     |> halt()
   end
 

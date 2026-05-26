@@ -2,6 +2,7 @@ defmodule LiveAgent.MCP.Tools do
   @moduledoc false
 
   alias LiveAgent.SocketInspector
+  alias LiveAgent.ScopeInspector
   alias LiveAgent.AshInspector
 
   def tools do
@@ -80,6 +81,35 @@ defmodule LiveAgent.MCP.Tools do
           }
         },
         callback: &get_socket_info/1
+      },
+      %{
+        name: "get_scope",
+        description: """
+        Returns the security scope bound to a LiveView — the actor (current
+        user), tenant/organization, and Ash scope context the user on screen is
+        authorized against. This is the sanitized, compact answer to "who is
+        this, and what are they scoped to?" without grepping the full assigns.
+
+        RUBRIC: call this before any `project_eval` / SQL that touches
+        tenant-scoped data, then bind the returned actor/tenant into your eval
+        so the query reproduces the user's exact authorization boundary —
+        instead of passing `authorize?: false` or a hand-built scope that does
+        not match what the user actually sees.
+
+        Resolution is heuristic across Ash apps (current_scope, current_user +
+        __tenant__, current_organization, …) and can be overridden with
+        `plug LiveAgent, scope_assign_keys: [:my_scope]`. A result with
+        `raw_present: false` means the LiveView has no scope-like assign (an
+        unscoped LV) — distinct from a lookup failure, which is an error.
+        """,
+        inputSchema: %{
+          type: "object",
+          required: ["pid"],
+          properties: %{
+            pid: %{type: "string", description: "PID string from list_live_views"}
+          }
+        },
+        callback: &get_scope/1
       },
       %{
         name: "get_state_history",
@@ -386,12 +416,16 @@ defmodule LiveAgent.MCP.Tools do
         Returns the file path (e.g. "Screenshot saved to /tmp/live_agent_screenshot_20260522T143055Z.png (1920×1080)").
         Use the Read tool on that path to view the image.
 
-        Optionally pass a CSS selector to capture only that element (e.g. a specific
-        component, section, or panel). Without a selector, the full viewport is captured.
-        The LiveAgent panel UI is automatically excluded from the capture.
+        Optionally clip the capture to a single element by `selector`, `cid`, or visible
+        `text` (e.g. a specific component, section, or panel) — this keeps the relevant
+        region from being buried in a full-page shot. Without any target, the full page
+        is captured. The result reports the captured rect when clipped. The LiveAgent
+        panel UI is automatically excluded from the capture.
 
         Use this to inspect layout, spacing, colours, and visual styling so you can
-        suggest or apply targeted CSS fixes.
+        suggest or apply targeted CSS fixes. To check whether a change moved only what
+        you intended, use screenshot_baseline + screenshot_diff instead of eyeballing
+        two full-page shots.
 
         Requires the LiveAgent panel to be open in a browser tab.
         """,
@@ -400,12 +434,81 @@ defmodule LiveAgent.MCP.Tools do
           properties: %{
             selector: %{
               type: "string",
-              description: "CSS selector for the element to capture (optional; omit for full viewport)"
+              description: "CSS selector for the element to capture (optional; omit for full page)"
+            },
+            cid: %{
+              type: "integer",
+              description: "LiveComponent cid to capture (from data-phx-component)"
+            },
+            text: %{
+              type: "string",
+              description: "Visible text of the element to capture"
             }
           },
           required: []
         },
         callback: &take_screenshot/1
+      },
+      %{
+        name: "screenshot_baseline",
+        description: """
+        Captures a screenshot now and saves it as a named baseline under
+        screenshots/baselines/<name>.png. Use this to mark a "before" state, then
+        apply a CSS/markup change, then call screenshot_diff with the same name to
+        see exactly what moved — instead of eyeballing two full-page images.
+
+        Optionally clip to one element by selector / cid / text (same targeting as
+        take_screenshot); a clipped baseline must be diffed with the same clip so the
+        dimensions line up. Re-using a name overwrites the existing baseline.
+
+        Requires the LiveAgent panel to be open in a browser tab.
+        """,
+        inputSchema: %{
+          type: "object",
+          required: ["name"],
+          properties: %{
+            name: %{type: "string", description: "Baseline name (letters, digits, '.', '_', '-')"},
+            selector: %{type: "string", description: "CSS selector to clip to (optional)"},
+            cid: %{type: "integer", description: "LiveComponent cid to clip to (optional)"},
+            text: %{type: "string", description: "Visible text of the element to clip to (optional)"}
+          }
+        },
+        callback: &screenshot_baseline/1
+      },
+      %{
+        name: "screenshot_diff",
+        description: """
+        Captures the current screen and compares it against the named baseline (from
+        screenshot_baseline), returning what changed instead of a second full image:
+
+          * changed_ratio  — fraction of pixels that differ (0.0–1.0)
+          * changed_boxes  — merged bounding boxes of the dirty regions
+          * dims_match     — false when the page reflowed (sizes differ); ratio/boxes
+                             are omitted in that case, both sizes are reported instead
+          * overlay_path   — screenshots/diffs/<name>.png, the baseline with changed
+                             pixels tinted red (read it to see the change)
+          * baseline_path  — the baseline that was compared against
+
+        Pass the SAME clip (selector / cid / text) you used for the baseline. Diffing
+        is anti-aliasing-aware: sub-pixel rendering noise is ignored by default. Tune
+        with `threshold` (0–1 colour distance, default 0.1) and `include_aa` (default
+        false). A missing baseline is an error pointing back at screenshot_baseline.
+
+        Requires the LiveAgent panel to be open in a browser tab.
+        """,
+        inputSchema: %{
+          type: "object",
+          required: ["name"],
+          properties: %{
+            name: %{type: "string", description: "Baseline name to compare against"},
+            selector: %{type: "string", description: "CSS selector to clip to (match the baseline)"},
+            cid: %{type: "integer", description: "LiveComponent cid to clip to (match the baseline)"},
+            text: %{type: "string", description: "Visible text to clip to (match the baseline)"},
+            threshold: %{type: "number", description: "Colour-distance threshold 0–1 (default 0.1)"},
+            include_aa: %{type: "boolean", description: "Count anti-aliased pixels as changed (default false)"}
+          }
+        },
+        callback: &screenshot_diff/1
       },
       %{
         name: "click",
@@ -534,6 +637,38 @@ defmodule LiveAgent.MCP.Tools do
           }
         },
         callback: &submit/1
+      },
+      %{
+        name: "act_as",
+        description: """
+        Logs the panel's browser session in as a chosen user/persona in one call, so the
+        driving tools (click/fill/navigate) then exercise the app AS that actor — without
+        the manual login dance. The flagship use case is testing multi-tenant org
+        isolation: act_as(orgB_admin) → navigate to org A's record → expect forbidden/404.
+
+        `identifier` is passed through verbatim to the host app's `:act_as` closure (email,
+        id, persona name — the app decides). On success the page reloads, the LiveSocket
+        reconnects authenticated, and this tool returns the new scope (actor/tenant) so you
+        immediately see who you became — no second get_scope call needed.
+
+        Requires (each returns a precise error, never a silent no-op):
+          * a dev/test build (impersonation never compiles into prod),
+          * `config :live_agent, act_as: &MyAppWeb.DevActAs.sign_in/2` plus a verbatim
+            `session_options:` copy of the endpoint's @session_options,
+          * the panel open AND the "Drive" toggle ON (impersonation is a privileged drive
+            action).
+        """,
+        inputSchema: %{
+          type: "object",
+          required: ["identifier"],
+          properties: %{
+            identifier: %{
+              type: "string",
+              description: "Persona to become; passed verbatim to the app's :act_as closure (e.g. an email)"
+            }
+          }
+        },
+        callback: &act_as/1
       },
       %{
         name: "wait_for",
@@ -747,6 +882,62 @@ defmodule LiveAgent.MCP.Tools do
         callback: &clear_errors/1
       },
       %{
+        name: "expect_assign",
+        description: """
+        Assertion sibling of get_assign: states pass/fail for a LiveView assign instead
+        of dumping it for you to eyeball. Reads the assign at `key` (a dot-path like
+        "alert.level" for nested maps/structs) and compares it.
+
+        Provide exactly one matcher:
+          * `equals`  — typed compare for scalars, with a stringified-compare fallback
+                        (so equals: "5" also matches the integer 5)
+          * `matches` — regex (or plain substring) tested against the stringified value
+
+        By default (`timeout_ms` 0) it checks immediately. Set `timeout_ms` > 0 to poll
+        until it passes or the time elapses — use this to wait out an async settle, the
+        same bound as wait_for. A failing/timed-out assertion is NOT an error: it returns
+        `{pass: false, ...}` with the last observed `actual`. Feeds the `verify` skill.
+
+        Returns: { pass, path, expected, actual, waited_ms }.
+        """,
+        inputSchema: %{
+          type: "object",
+          required: ["pid", "key"],
+          properties: %{
+            pid: %{type: "string", description: "PID string from list_live_views"},
+            key: %{type: "string", description: "Assign key or dot-path, e.g. \"alert.level\""},
+            equals: %{description: "Expected value (any JSON scalar/structure)"},
+            matches: %{type: "string", description: "Regex or substring tested against the stringified value"},
+            timeout_ms: %{type: "integer", description: "0 = check now (default); >0 = poll until pass or timeout"}
+          }
+        },
+        callback: &expect_assign/1
+      },
+      %{
+        name: "expect_no_errors",
+        description: """
+        Assertion gate over the error log: passes only if no errors were recorded.
+        Reuses the same store as get_errors (browser JS errors + server LiveView
+        exceptions).
+
+        Intended pattern — wrap an action so you get a clean pass/fail:
+          1. clear_errors
+          2. perform the action (click / fill / submit / navigate)
+          3. expect_no_errors
+
+        Or pass `since_id` (an `id` from a prior get_errors response) to only consider
+        errors newer than that point. Returns `{pass, count, errors}`.
+        """,
+        inputSchema: %{
+          type: "object",
+          properties: %{
+            since_id: %{type: "integer", description: "Only consider errors with id greater than this (default 0 = all)"}
+          },
+          required: []
+        },
+        callback: &expect_no_errors/1
+      },
+      %{
         name: "get_browser_logs",
         description: """
         Returns a tail of `console.{log,info,warn,error,debug}` calls captured
@@ -945,6 +1136,8 @@ defmodule LiveAgent.MCP.Tools do
     else
       text =
         views
+        # Connected root first — that's the one to drive / inspect.
+        |> Enum.sort_by(fn v -> if v[:root] && v.connected, do: 0, else: 1 end)
         |> Enum.with_index(1)
         |> Enum.map(fn {view, i} ->
           keys_preview = Enum.take(view.assign_keys, 10) |> Enum.join(", ")
@@ -954,18 +1147,26 @@ defmodule LiveAgent.MCP.Tools do
               do: " (+#{length(view.assign_keys) - 10} more)",
               else: ""
 
+          root_tag = if view[:root] && view.connected, do: "  ← connected root", else: ""
+
           """
-          #{i}. #{view.view}
+          #{i}. #{view.view}#{root_tag}
              PID:       #{view.pid_string}
              Socket ID: #{view.id || "(none)"}
              URL:       #{view.url || "(none)"}
              Connected: #{view.connected}
+             Root:      #{view[:root] == true}
              Assigns:   [#{keys_preview}#{more}]
           """
         end)
         |> Enum.join("\n")
 
-      {:ok, "Found #{length(views)} LiveView process(es):\n\n#{text}"}
+      hint =
+        "\nThe connected root (marked ←) is the live view on screen — pass its PID to " <>
+          "get_assigns / get_scope / expect_assign. After an act_as reload, prior roots " <>
+          "may briefly linger; the connected root is the current one.\n"
+
+      {:ok, "Found #{length(views)} LiveView process(es):\n#{hint}\n#{text}"}
     end
   end
 
@@ -1031,6 +1232,15 @@ defmodule LiveAgent.MCP.Tools do
   end
 
   defp get_socket_info(_), do: {:error, :invalid_arguments}
+
+  defp get_scope(%{"pid" => pid}) do
+    case ScopeInspector.get_scope(pid) do
+      {:ok, scope} -> {:ok, Jason.encode!(scope, pretty: true)}
+      {:error, reason} -> {:error, to_string(reason)}
+    end
+  end
+
+  defp get_scope(_), do: {:error, :invalid_arguments}
 
   defp get_state_history(%{"pid" => pid} = args) do
     last_n = args |> Map.get("last_n", 20) |> normalize_last_n()
@@ -1299,6 +1509,124 @@ defmodule LiveAgent.MCP.Tools do
   defp clear_errors(_args) do
     LiveAgent.ErrorStore.clear()
     {:ok, "Error log cleared."}
+  end
+
+  defp expect_assign(%{"pid" => pid, "key" => key} = args)
+       when is_binary(pid) and is_binary(key) do
+    case build_assign_matcher(args) do
+      {:ok, matcher} ->
+        timeout = normalize_expect_timeout(Map.get(args, "timeout_ms", 0))
+        poll_expect_assign(pid, key, matcher, timeout, System.monotonic_time(:millisecond))
+
+      {:error, msg} ->
+        {:error, msg}
+    end
+  end
+
+  defp expect_assign(_),
+    do:
+      {:error,
+       "expect_assign requires 'pid' and 'key' (strings) plus one of 'equals' or 'matches'"}
+
+  defp build_assign_matcher(args) do
+    cond do
+      Map.has_key?(args, "equals") ->
+        {:ok, {:equals, Map.get(args, "equals")}}
+
+      Map.has_key?(args, "matches") ->
+        case Map.get(args, "matches") do
+          p when is_binary(p) -> {:ok, {:matches, p}}
+          _ -> {:error, "'matches' must be a string (regex or substring)"}
+        end
+
+      true ->
+        {:error, "expect_assign requires one of 'equals' or 'matches'"}
+    end
+  end
+
+  defp normalize_expect_timeout(ms) when is_integer(ms) and ms > 0, do: min(ms, 30_000)
+  defp normalize_expect_timeout(_), do: 0
+
+  defp poll_expect_assign(pid, key, matcher, timeout, t0) do
+    case SocketInspector.get_assigns(pid) do
+      {:ok, assigns} ->
+        {actual, found?} =
+          case LiveAgent.KeyPath.get(assigns, key) do
+            {:ok, value} -> {value, true}
+            :not_found -> {nil, false}
+          end
+
+        pass? = found? and match_assign?(matcher, actual)
+        elapsed = System.monotonic_time(:millisecond) - t0
+
+        cond do
+          pass? ->
+            {:ok, expect_assign_verdict(true, key, matcher, actual, found?, elapsed)}
+
+          elapsed >= timeout ->
+            {:ok, expect_assign_verdict(false, key, matcher, actual, found?, elapsed)}
+
+          true ->
+            Process.sleep(100)
+            poll_expect_assign(pid, key, matcher, timeout, t0)
+        end
+
+      {:error, reason} ->
+        {:error,
+         "Failed to read assigns for #{pid}: #{inspect(reason)} — call list_live_views to confirm the pid."}
+    end
+  end
+
+  defp match_assign?({:equals, expected}, actual) do
+    actual === expected or stringify_assign(actual) == stringify_assign(expected)
+  end
+
+  defp match_assign?({:matches, pattern}, actual) do
+    subject = stringify_assign(actual)
+
+    case Regex.compile(pattern) do
+      {:ok, regex} -> Regex.match?(regex, subject)
+      _ -> String.contains?(subject, pattern)
+    end
+  end
+
+  defp stringify_assign(v) when is_binary(v), do: v
+  defp stringify_assign(nil), do: ""
+  defp stringify_assign(v) when is_number(v) or is_boolean(v) or is_atom(v), do: to_string(v)
+  defp stringify_assign(v), do: Jason.encode!(v)
+
+  defp expect_assign_verdict(pass?, key, matcher, actual, found?, elapsed) do
+    expected =
+      case matcher do
+        {:equals, v} -> %{equals: v}
+        {:matches, p} -> %{matches: p}
+      end
+
+    verdict = %{
+      pass: pass?,
+      path: key,
+      expected: expected,
+      actual: if(found?, do: actual, else: nil),
+      waited_ms: elapsed
+    }
+
+    verdict =
+      if found?, do: verdict, else: Map.put(verdict, :note, "key path not found in assigns")
+
+    Jason.encode!(verdict, pretty: true)
+  end
+
+  defp expect_no_errors(args) when is_map(args) do
+    since_id = Map.get(args, "since_id", 0)
+    errors = LiveAgent.ErrorStore.get_errors(since_id)
+
+    verdict = %{
+      pass: errors == [],
+      count: length(errors),
+      errors: errors
+    }
+
+    {:ok, Jason.encode!(verdict, pretty: true)}
   end
 
   # ── Console capture ───────────────────────────────────────────────────────
@@ -1905,11 +2233,7 @@ defmodule LiveAgent.MCP.Tools do
   end
 
   defp take_screenshot(args) when is_map(args) do
-    payload =
-      case Map.get(args, "selector") do
-        nil -> %{}
-        sel -> %{selector: sel}
-      end
+    payload = capture_payload(args)
 
     case LiveAgent.CommandQueue.enqueue_and_await("screenshot", payload,
            timeout_ms: 30_000,
@@ -1939,7 +2263,26 @@ defmodule LiveAgent.MCP.Tools do
     w = Map.get(result, "width")
     h = Map.get(result, "height")
     dims = if w && h, do: " (#{w}×#{h})", else: ""
-    "Screenshot saved to #{path}#{dims}"
+    "Screenshot saved to #{path}#{dims}#{format_capture_rect(result)}"
+  end
+
+  defp format_capture_rect(%{"rect" => %{} = rect}) do
+    "\nClipped to region: #{Jason.encode!(rect)}"
+  end
+
+  defp format_capture_rect(_), do: ""
+
+  # Builds the browser capture payload from cid / selector / text args. Shared
+  # by take_screenshot, screenshot_baseline, and screenshot_diff so all three
+  # clip identically. Omitting all three captures the full page.
+  defp capture_payload(args) do
+    ["selector", "cid", "text"]
+    |> Enum.reduce(%{}, fn k, acc ->
+      case Map.get(args, k) do
+        nil -> acc
+        v -> Map.put(acc, String.to_atom(k), v)
+      end
+    end)
   end
 
   # /tmp is hardcoded on purpose — System.tmp_dir!() returns the user-scoped
@@ -1979,6 +2322,154 @@ defmodule LiveAgent.MCP.Tools do
 
         {:error, :invalid_base64}
     end
+  end
+
+  defp screenshot_baseline(%{"name" => name} = args) when is_binary(name) do
+    case LiveAgent.BaselineStore.validate_name(name) do
+      {:ok, _} ->
+        payload = capture_payload(args)
+
+        case LiveAgent.CommandQueue.enqueue_and_await("screenshot", payload,
+               timeout_ms: 30_000,
+               wait_ready_ms: 6_000
+             ) do
+          {:ok, %{"ok" => true, "base64" => base64} = result} ->
+            store_baseline(name, base64, result)
+
+          {:ok, %{"ok" => false, "error" => err}} ->
+            {:error, "browser: " <> to_string(err)}
+
+          {:error, :timeout} ->
+            {:error, panel_timeout_message()}
+
+          {:error, reason} ->
+            {:error, inspect(reason)}
+        end
+
+      {:error, msg} ->
+        {:error, "invalid baseline name: #{msg}"}
+    end
+  end
+
+  defp screenshot_baseline(_), do: {:error, "screenshot_baseline requires 'name' (string)"}
+
+  defp store_baseline(name, base64, result) do
+    case Base.decode64(base64) do
+      {:ok, bytes} ->
+        case LiveAgent.BaselineStore.put(name, bytes) do
+          {:ok, path} ->
+            w = Map.get(result, "width")
+            h = Map.get(result, "height")
+            dims = if w && h, do: " (#{w}×#{h})", else: ""
+            {:ok, "Baseline #{inspect(name)} saved to #{path}#{dims}#{format_capture_rect(result)}"}
+
+          {:error, reason} ->
+            {:error, "failed to save baseline: #{inspect(reason)}"}
+        end
+
+      :error ->
+        {:error, "screenshot base64 decode failed"}
+    end
+  end
+
+  defp screenshot_diff(%{"name" => name} = args) when is_binary(name) do
+    with {:ok, _} <- LiveAgent.BaselineStore.validate_name(name),
+         {:ok, baseline_bytes} <- fetch_baseline(name) do
+      payload =
+        args
+        |> capture_payload()
+        |> Map.put(:baseline_png, Base.encode64(baseline_bytes))
+        |> Map.put(:threshold, Map.get(args, "threshold", 0.1))
+        |> Map.put(:include_aa, Map.get(args, "include_aa", false))
+
+      case LiveAgent.CommandQueue.enqueue_and_await("screenshot_diff", payload,
+             timeout_ms: 30_000,
+             wait_ready_ms: 6_000
+           ) do
+        {:ok, %{"ok" => true} = result} ->
+          format_diff_result(name, result)
+
+        {:ok, %{"ok" => false, "error" => err}} ->
+          {:error, "browser: " <> to_string(err)}
+
+        {:error, :timeout} ->
+          {:error, panel_timeout_message()}
+
+        {:error, reason} ->
+          {:error, inspect(reason)}
+      end
+    else
+      {:error, :not_found} ->
+        {:error,
+         "No baseline named #{inspect(name)}. Capture one first with " <>
+           "screenshot_baseline(name: #{inspect(name)})."}
+
+      {:error, msg} when is_binary(msg) ->
+        {:error, "invalid baseline name: #{msg}"}
+
+      {:error, reason} ->
+        {:error, "failed to read baseline: #{inspect(reason)}"}
+    end
+  end
+
+  defp screenshot_diff(_), do: {:error, "screenshot_diff requires 'name' (string)"}
+
+  defp fetch_baseline(name), do: LiveAgent.BaselineStore.get(name)
+
+  # Dimensions diverged → the page reflowed; a pixel diff would be meaningless,
+  # so report both sizes instead of a bogus ratio.
+  defp format_diff_result(name, %{"dims_match" => false} = result) do
+    baseline = Map.get(result, "baseline_size")
+    current = Map.get(result, "current_size")
+
+    summary = %{
+      name: name,
+      dims_match?: false,
+      baseline_size: baseline,
+      current_size: current,
+      baseline_path: relative_path(LiveAgent.BaselineStore.baseline_path(name))
+    }
+
+    {:ok,
+     "Dimensions differ — the page reflowed, so no pixel ratio was computed.\n" <>
+       Jason.encode!(summary, pretty: true)}
+  end
+
+  defp format_diff_result(name, %{"diff_png" => diff_base64} = result) do
+    case Base.decode64(diff_base64 || "") do
+      {:ok, bytes} ->
+        diff_path =
+          case LiveAgent.BaselineStore.put_diff(name, bytes) do
+            {:ok, path} -> relative_path(path)
+            _ -> nil
+          end
+
+        summary = %{
+          name: name,
+          changed_ratio: Map.get(result, "changed_ratio"),
+          changed_boxes: Map.get(result, "changed_boxes", []),
+          dims_match?: true,
+          width: Map.get(result, "width"),
+          height: Map.get(result, "height"),
+          overlay_path: diff_path,
+          baseline_path: relative_path(LiveAgent.BaselineStore.baseline_path(name))
+        }
+
+        {:ok, Jason.encode!(summary, pretty: true)}
+
+      :error ->
+        {:error, "diff image base64 decode failed"}
+    end
+  end
+
+  defp format_diff_result(_name, result),
+    do: {:error, "unexpected diff result: #{Jason.encode!(result)}"}
+
+  # Paths are shown relative to cwd (the project root) when possible — shorter
+  # and directly openable by the user/Read tool.
+  defp relative_path(abs) do
+    cwd = File.cwd!()
+    if String.starts_with?(abs, cwd <> "/"), do: Path.relative_to(abs, cwd), else: abs
   end
 
   defp click(args) when is_map(args) do
@@ -2023,6 +2514,116 @@ defmodule LiveAgent.MCP.Tools do
     else
       dispatch_drive_command("submit", payload, &format_drive_result(&1, "Submitted"))
     end
+  end
+
+  defp act_as(%{"identifier" => identifier}) when is_binary(identifier) and identifier != "" do
+    with :ok <- act_as_available() do
+      # Snapshot current LV pids so we can recognise the *fresh* socket that
+      # appears after the panel reloads and reconnects as the new actor.
+      old_pids = current_lv_pid_set()
+
+      case LiveAgent.CommandQueue.enqueue_and_await("act_as", %{identifier: identifier},
+             timeout_ms: 15_000
+           ) do
+        {:ok, %{"ok" => true} = result} ->
+          {:ok, format_act_as(identifier, Map.get(result, "who"), await_new_scope(old_pids, 6_000))}
+
+        {:ok, %{"ok" => false, "error" => err}} ->
+          {:error, "browser: " <> to_string(err)}
+
+        {:error, :timeout} ->
+          {:error, panel_timeout_message()}
+
+        {:error, reason} ->
+          {:error, inspect(reason)}
+      end
+    end
+  end
+
+  defp act_as(_), do: {:error, "act_as requires 'identifier' (a non-empty string)"}
+
+  # Mirrors the route's gate so Claude gets the precise setup error before we
+  # ever drive the browser. The env check is an `if` (not a `cond` clause) so the
+  # compile-time-constant `act_as_enabled?/0` doesn't read as a dead clause.
+  defp act_as_available do
+    if LiveAgent.Config.act_as_enabled?() do
+      act_as_config_available()
+    else
+      {:error, "act_as is available only in :dev/:test builds."}
+    end
+  end
+
+  defp act_as_config_available do
+    cond do
+      match?({:error, _}, LiveAgent.Config.act_as_fun()) ->
+        {:error,
+         "act_as is not configured. In config/dev.exs set " <>
+           "`config :live_agent, act_as: &MyAppWeb.DevActAs.sign_in/2` (a 2-arity closure)."}
+
+      match?({:error, _}, LiveAgent.Config.session_options()) ->
+        {:error,
+         "act_as needs `:session_options` too — copy it VERBATIM from your endpoint's " <>
+           "@session_options (config :live_agent, session_options: [...]). A salt mismatch " <>
+           "silently fails to authenticate after reload."}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp current_lv_pid_set do
+    SocketInspector.list_live_views() |> Enum.map(& &1.pid_string) |> MapSet.new()
+  end
+
+  # After the reload, the old LV channel dies and a fresh connected one appears.
+  # Poll for a connected LV whose pid wasn't present before, then read its scope.
+  defp await_new_scope(old_pids, timeout) do
+    await_new_scope(old_pids, timeout, System.monotonic_time(:millisecond))
+  end
+
+  defp await_new_scope(old_pids, timeout, t0) do
+    # Prefer the fresh *connected root* (parent_pid nil); fall back to any fresh
+    # connected LV so a child-only page still resolves.
+    candidates =
+      SocketInspector.list_live_views()
+      |> Enum.filter(fn lv -> lv.connected and not MapSet.member?(old_pids, lv.pid_string) end)
+
+    fresh = Enum.find(candidates, & &1[:root]) || List.first(candidates)
+
+    cond do
+      fresh != nil ->
+        case LiveAgent.ScopeInspector.get_scope(fresh.pid_string) do
+          {:ok, scope} -> {:ok, fresh.pid_string, scope}
+          _ -> {:unreadable, fresh.pid_string}
+        end
+
+      System.monotonic_time(:millisecond) - t0 >= timeout ->
+        :timeout
+
+      true ->
+        Process.sleep(200)
+        await_new_scope(old_pids, timeout, t0)
+    end
+  end
+
+  defp format_act_as(identifier, who, scope_result) do
+    header = "Acting as: #{who || identifier}"
+
+    body =
+      case scope_result do
+        {:ok, pid, scope} ->
+          "\n\nActive LiveView pid: #{pid}  (pass this to get_assigns / get_scope / expect_assign)" <>
+            "\n\nReconnected scope:\n" <> Jason.encode!(scope, pretty: true)
+
+        {:unreadable, pid} ->
+          "\n\nActive LiveView pid: #{pid}  (scope read failed — call get_scope #{pid} to verify)"
+
+        :timeout ->
+          "\n\n(Reconnect not confirmed within 6s — call list_live_views and use the " <>
+            "connected root, or check that the panel reloaded.)"
+      end
+
+    header <> body
   end
 
   defp wait_for(%{"assign" => %{"pid" => pid, "key" => key} = a} = args)

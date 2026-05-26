@@ -187,6 +187,9 @@ defmodule LiveAgent.SocketInspector do
           id: socket.id,
           url: socket_url(socket),
           connected: socket.transport_pid != nil,
+          # Top-level LiveView (vs a nested live_render child). A connected root
+          # is the one to drive/inspect; nested and stale-disconnected LVs are not.
+          root: socket.parent_pid == nil,
           assign_keys:
             socket.assigns
             |> Map.keys()
@@ -267,6 +270,13 @@ defmodule LiveAgent.SocketInspector do
       {key, sanitize(v)}
     end)
   end
+
+  @doc """
+  Sanitizes a single value into the same JSON-serializable form used for
+  assigns (structs → maps, atoms → strings, pids → strings, etc.). Public so
+  sibling inspectors (e.g. `ScopeInspector`) can reuse the one sanitizer.
+  """
+  def sanitize_value(v), do: sanitize(v)
 
   defp sanitize(v) when is_binary(v), do: v
   defp sanitize(v) when is_number(v), do: v

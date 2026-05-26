@@ -23,6 +23,33 @@ defmodule LiveAgent.EventStore do
 
   def clear, do: GenServer.cast(__MODULE__, :clear)
 
+  @doc """
+  Pushes a non-telemetry event into the same ring buffer (e.g. an `act_as`
+  impersonation), so it shows up in the Events pane alongside LiveView events.
+  `attrs` overrides the default fields; an `:id` is assigned by the store.
+  """
+  def push_custom(attrs) when is_map(attrs) do
+    event =
+      Map.merge(
+        %{
+          scope: "live_agent",
+          type: "custom",
+          action: nil,
+          event: nil,
+          view: nil,
+          component: nil,
+          duration_ms: nil,
+          params: nil,
+          uri: nil,
+          error: nil,
+          timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
+        },
+        attrs
+      )
+
+    GenServer.cast(__MODULE__, {:push, event})
+  end
+
   # ─── GenServer callbacks ───────────────────────────────────────────────────
 
   def init(_) do

@@ -9,7 +9,8 @@ defmodule LiveAgent do
       drive_default: Keyword.get(opts, :drive_default, false),
       open_default: Keyword.get(opts, :open_default, false),
       oban_tools: Keyword.get(opts, :oban_tools, false),
-      pubsub_tools: Keyword.get(opts, :pubsub_tools, false)
+      pubsub_tools: Keyword.get(opts, :pubsub_tools, false),
+      scope_assign_keys: Keyword.get(opts, :scope_assign_keys, [])
     }
   end
 
