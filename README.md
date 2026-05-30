@@ -30,7 +30,7 @@ The panel has eight panels, each toggled independently from the launcher bar —
 | --------------- | ------------------------------------------------------------------------------------------ |
 | **LiveViews**   | All active LiveView processes — click `▶` to expand assigns inline                         |
 | **Selected**    | The DOM element you picked with the element picker, with component resolution              |
-| **Context**     | The element you pinned for Claude to read                                                  |
+| **Context**     | Elements you've pinned for Claude, numbered 📌1, 📌2 … — each pin shows a badge overlay on the element in the page |
 | **Events**      | Live log of `handle_event`, `mount`, `handle_params`, and `handle_info` calls              |
 | **Timeline**    | Ordered list of assigns transitions per LiveView — trigger, diff counts, click to expand   |
 | **Async**       | In-flight `start_async` / `assign_async` tasks with live elapsed time, plus a completion history per LiveView |
@@ -43,7 +43,7 @@ The top-right of the bar also has the **Drive** toggle and the **agent control s
 
 **Statusbar checkbox** — next to **Drive**. Collapses the panel to just the toolbar strip (~36px tall), hiding the panes below and giving that vertical space back to the host app. The checked state is remembered per browser (localStorage). Clicking any panel button or the resize (↕) button automatically unchecks it so the panes can render again.
 
-**Element picker** — click **🔍 Pick**, then click any element on the page. LiveAgent captures its HTML, CSS classes, and Phoenix attributes (`phx-click`, `data-phx-component`, etc.). If the element belongs to a LiveComponent, the **Selected** panel automatically shows the component module, its `id`, and its current assign keys — resolved directly from the running BEAM process. Click **📋 Pin to Claude Context** to make it available to Claude via MCP.
+**Element picker** — click **🔍 Pick**, then click any element on the page. LiveAgent captures its HTML, CSS classes, and Phoenix attributes (`phx-click`, `data-phx-component`, etc.). If the element belongs to a LiveComponent, the **Selected** panel automatically shows the component module, its `id`, and its current assign keys — resolved directly from the running BEAM process. Click **📋 Pin to Claude Context** to pin the element — you can pin multiple elements (📌1, 📌2, …) and each gets a numbered badge overlaid on it in the page. All pinned elements are available to Claude via `get_pinned_context` at once, so you can pin a "source" element and a "target" element and ask Claude to mirror a change from one to the other.
 
 **Resources tab** — lists every Ash resource loaded in the running app. Click `▶` on any resource to expand a full breakdown: attributes with types and constraints, actions with their accepted fields and arguments, relationships with destination resources, and any calculations or aggregates. Loaded once when the tab is first opened. Requires Ash to be installed — the tab is still shown but displays a message if Ash is not available.
 
@@ -97,6 +97,25 @@ Claude Code can call these tools while you work:
 | `screenshot_diff`       | Compares the current screen to a named baseline and returns `changed_ratio`, merged `changed_boxes`, `dims_match?`, and an `overlay_path` (baseline with changed pixels tinted red) instead of two full images. AA-aware; tune via `threshold` / `include_aa`. |
 | `expect_assign`         | Assertion sibling of `get_assign`: returns `{pass, path, expected, actual, waited_ms}` for an assign (dot-path supported) via `equals` or `matches`, instead of dumping state to eyeball. `timeout_ms > 0` polls until it passes (async settle); a failure is `pass: false`, not an error. |
 | `expect_no_errors`      | Assertion gate over the error log — `pass` only if no errors recorded (optionally since a `since_id`). Pattern: `clear_errors` → act → `expect_no_errors`. Returns `{pass, count, errors}`. |
+| `get_errors`            | Returns JS and server errors collected since the server started — uncaught exceptions, unhandled Promise rejections, and LiveView callback exceptions. Each error has a `source` ("js" or "server"), message, stacktrace, and timestamp. Pass `since_id` to fetch only new errors. |
+| `clear_errors`          | Clears the error buffer. Use before reproducing an issue so `expect_no_errors` only sees new errors. |
+| `inject_css`            | Injects a CSS rule block directly into the user's browser page without touching source files. Use to prototype style fixes visually, then write the confirmed fix to the actual stylesheet. Pass an `id` to label injections so you can revert by name. Requires the panel open. |
+| `revert_css`            | Removes previously injected CSS. Pass `id` to remove a specific injection or omit to remove all. Requires the panel open. |
+| `scroll_to`             | Scrolls the browser page to bring an element into view by CSS selector. Useful before `take_screenshot` to capture below-the-fold content. Requires the panel open. |
+| `get_computed_styles`   | Returns the browser's resolved computed CSS for an element — final values after all stylesheets, inheritance, and cascade. Also returns the element's bounding rect. Pass a `properties` list to fetch only specific CSS properties. Requires the panel open. |
+| `get_browser_logs`      | Returns a tail of `console.{log,info,warn,error,debug}` output captured from the host page. Useful when a browser command fails silently. Filterable by `levels` and `since_id`. Ring buffer of last 500 entries; LiveAgent's own calls are excluded. |
+| `clear_browser_logs`    | Clears the browser console log buffer. |
+| `list_lv_routes`        | Lists every Phoenix LiveView route in every router loaded in the running VM — path, LiveView module, `live_action`, `live_session`, and parent router. Filter by router substring or path prefix. Use before `navigate` to find the right path. |
+
+**Optional tools** (enabled per plug option — see [Options](#options)):
+
+| Tool                    | Description                                                                     |
+| ----------------------- | ------------------------------------------------------------------------------- |
+| `list_oban_jobs`        | Lists rows from the host app's `oban_jobs` table. Filter by `state`, `queue`, `worker`, or `limit`. Enabled by `oban_tools: true`. |
+| `get_oban_job`          | Fetches full details for one Oban job by id, including its error history. Enabled by `oban_tools: true`. |
+| `retry_oban_job`        | Moves an Oban job back to `available` so it's picked up on the next queue poll. Wraps `Oban.retry_job/1`. Enabled by `oban_tools: true`. |
+| `list_pubsub_topics`    | Lists every Phoenix.PubSub topic that currently has at least one local subscriber, with subscriber counts. Enabled by `pubsub_tools: true` or `pubsub_tools: MyApp.PubSub`. |
+| `tail_pubsub_topic`     | Subscribes to a PubSub topic and returns up to `max_n` messages received within `wait_ms`. Useful for verifying realtime fan-out — call this, trigger an action (e.g. via `click`), and get back the captured broadcast. Enabled by `pubsub_tools: ...`. |
 
 ### Agent controls
 
@@ -391,10 +410,11 @@ No instrumentation required in your LiveViews — it works with any existing Pho
 1. Open your app in the browser
 2. Click **⚡ LA** (bottom-right) to open the panel
 3. Click **🔍 Pick** and select any element on the page
-4. Click **📋 Pin to Claude Context**
-5. Ask Claude: _"Add a Status column to this table"_
+4. Click **📋 Pin to Claude Context** — a numbered badge (📌1) appears on the element
+5. Pick and pin more elements if needed (📌2, 📌3, …)
+6. Ask Claude: _"Add a Status column to this table"_ or _"Make the sidebar match the card style I pinned"_
 
-Claude calls `get_pinned_context`, gets the element's HTML and Phoenix metadata, finds the `.heex` template, and makes the change.
+Claude calls `get_pinned_context`, gets all pinned elements' HTML and Phoenix metadata, finds the `.heex` templates, and makes the change.
 
 ### Via the Events tab
 
@@ -597,9 +617,12 @@ For "what's loading right now" and "what async work just finished":
 | `drive_default`       | `false` | Default for the **Drive** toggle on first visit (no localStorage entry yet). Once the user flips the toggle, their stored preference wins. |
 | `open_default`        | `false` | If `true`, the panel auto-opens on page load instead of starting collapsed behind the floating **⚡ LA** button. Persisted per browser — once the user closes the panel, that choice is remembered. |
 | `scope_assign_keys`   | `[]`    | Extra assign keys (atoms) that `get_scope` should treat as the security scope, tried before the built-in heuristics. Use when your app stores scope under a custom key, e.g. `scope_assign_keys: [:current_membership]`. |
+| `oban_tools`          | `false` | Set to `true` to enable the Oban MCP tools (`list_oban_jobs`, `get_oban_job`, `retry_oban_job`). Requires Oban to be installed and running. |
+| `pubsub_tools`        | `false` | Set to `true` to auto-discover the host app's PubSub, or pass the PubSub module directly (e.g. `pubsub_tools: MyApp.PubSub`). Enables `list_pubsub_topics` and `tail_pubsub_topic`. |
 
 ```elixir
 plug LiveAgent, allow_remote_access: false, drive_default: true, open_default: true
+plug LiveAgent, oban_tools: true, pubsub_tools: MyApp.PubSub
 ```
 
 ---
