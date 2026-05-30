@@ -210,12 +210,19 @@ defmodule LiveAgent.Router do
   end
 
   post "/api/pin" do
-    LiveAgent.BrowserStateStore.pin_context()
+    case LiveAgent.BrowserStateStore.pin_context() do
+      {:ok, index} ->
+        conn
+        |> put_resp_header("content-type", "application/json")
+        |> send_resp(200, Jason.encode!(%{ok: true, index: index}))
+        |> halt()
 
-    conn
-    |> put_resp_header("content-type", "application/json")
-    |> send_resp(200, "{\"ok\":true}")
-    |> halt()
+      {:error, :no_element} ->
+        conn
+        |> put_resp_header("content-type", "application/json")
+        |> send_resp(400, "{\"ok\":false,\"error\":\"no element selected\"}")
+        |> halt()
+    end
   end
 
   post "/api/errors" do
@@ -356,8 +363,18 @@ defmodule LiveAgent.Router do
     |> halt()
   end
 
+  delete "/api/pin/:index" do
+    index = String.to_integer(conn.path_params["index"])
+    LiveAgent.BrowserStateStore.clear_pinned_context(index)
+
+    conn
+    |> put_resp_header("content-type", "application/json")
+    |> send_resp(200, "{\"ok\":true}")
+    |> halt()
+  end
+
   delete "/api/pin" do
-    LiveAgent.BrowserStateStore.clear_pinned_context()
+    LiveAgent.BrowserStateStore.clear_all_pinned_contexts()
 
     conn
     |> put_resp_header("content-type", "application/json")

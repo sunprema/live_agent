@@ -13,7 +13,8 @@
     assignsCache: {},
     selectedElement: null,
     selectedComponent: null,
-    pinnedContext: null,
+    _selectedDomEl: null,
+    pinnedContexts: [],
     pickerActive: false,
     _pickerTarget: null,
     _pollTimer: null,
@@ -351,6 +352,7 @@
 
     state.selectedElement = data;
     state.selectedComponent = null;
+    state._selectedDomEl = el;
 
     fetch(BASE + "/api/element", {
       method: "POST",
@@ -388,17 +390,59 @@
       .catch(() => null);
   }
 
+  function createPinBadge(index, domEl) {
+    const badge = document.createElement("div");
+    badge.className = "la-pin-badge";
+    badge.dataset.pinIndex = index;
+    badge.textContent = "📌" + index;
+    document.body.appendChild(badge);
+    positionPinBadge(badge, domEl);
+    return badge;
+  }
+
+  function positionPinBadge(badge, domEl) {
+    if (!domEl || !document.body.contains(domEl)) return;
+    const rect = domEl.getBoundingClientRect();
+    badge.style.top = (rect.top + window.scrollY) + "px";
+    badge.style.left = (rect.left + window.scrollX) + "px";
+  }
+
+  function repositionAllBadges() {
+    state.pinnedContexts.forEach(({ domEl, badgeEl }) => positionPinBadge(badgeEl, domEl));
+  }
+
   function apiPin() {
-    return fetch(BASE + "/api/pin", { method: "POST" }).then(() => {
-      state.pinnedContext = state.selectedElement;
-      if (!state.openPanes.includes("context")) addPane("context");
-      else renderPaneContent("context");
+    if (!state.selectedElement || !state._selectedDomEl) return;
+    const domEl = state._selectedDomEl;
+    return fetch(BASE + "/api/pin", { method: "POST" })
+      .then((r) => r.json())
+      .then(({ index }) => {
+        const badgeEl = createPinBadge(index, domEl);
+        state.pinnedContexts.push({ index, data: state.selectedElement, domEl, badgeEl });
+        if (!state.openPanes.includes("context")) addPane("context");
+        else renderPaneContent("context");
+      });
+  }
+
+  function apiClearPin(index) {
+    return fetch(BASE + "/api/pin/" + index, { method: "DELETE" }).then(() => {
+      const entry = state.pinnedContexts.find((p) => p.index === index);
+      if (entry && entry.badgeEl) entry.badgeEl.remove();
+      state.pinnedContexts = state.pinnedContexts.filter((p) => p.index !== index);
+      // re-number badges to match server re-index
+      state.pinnedContexts.forEach((entry, i) => {
+        entry.index = i + 1;
+        if (entry.badgeEl) entry.badgeEl.textContent = "📌" + (i + 1);
+        if (entry.badgeEl) entry.badgeEl.dataset.pinIndex = i + 1;
+      });
+      renderPaneContent("context");
     });
   }
 
-  function apiClearPin() {
+  function apiClearAllPins() {
     return fetch(BASE + "/api/pin", { method: "DELETE" }).then(() => {
-      state.pinnedContext = null;
+      state.pinnedContexts.forEach(({ badgeEl }) => { if (badgeEl) badgeEl.remove(); });
+      state.pinnedContexts = [];
       renderPaneContent("context");
     });
   }
@@ -1933,6 +1977,9 @@
       if (document.visibilityState === "visible") postHello();
     });
     window.addEventListener("phx:page-loading-stop", postHello);
+
+    window.addEventListener("scroll", repositionAllBadges, { passive: true });
+    window.addEventListener("resize", repositionAllBadges, { passive: true });
   }
 
   // ─── Panel Controls ────────────────────────────────────────────────────────
@@ -2243,8 +2290,11 @@
     }
 
     if (name === "context") {
-      const clear = el.querySelector("#la-clear-btn");
-      if (clear) clear.addEventListener("click", apiClearPin);
+      el.querySelectorAll(".la-clear-pin-btn").forEach((btn) => {
+        btn.addEventListener("click", () => apiClearPin(parseInt(btn.dataset.pinIndex, 10)));
+      });
+      const clearAll = el.querySelector("#la-clear-all-pins-btn");
+      if (clearAll) clearAll.addEventListener("click", apiClearAllPins);
     }
 
     if (name === "resources") {
@@ -2427,6 +2477,10 @@
       : "";
 
     return `<div class="la-card">
+      <div class="la-actions">
+        <button id="la-pin-btn" class="la-btn la-btn-primary">&#128203; Pin to Claude Context</button>
+      </div>
+
       <div class="la-element-tag">${tag}</div>
       ${el.text ? `<div class="la-text-preview la-dim">${escHtml(el.text.slice(0, 120))}</div>` : ""}
 
@@ -2462,49 +2516,51 @@
 
       <div class="la-section-label">HTML</div>
       <pre class="la-pre">${escHtml(el.outerHTML.slice(0, 2000))}</pre>
-
-      <div class="la-actions">
-        <button id="la-pin-btn" class="la-btn la-btn-primary">&#128203; Pin to Claude Context</button>
-      </div>
     </div>`;
   }
 
   function renderContext() {
-    const ctx = state.pinnedContext;
-    if (!ctx) {
+    const pins = state.pinnedContexts;
+    if (!pins.length) {
       return `<div class="la-empty">Nothing pinned yet.<br>
         <span class="la-dim">Select an element and click <strong>&#128203; Pin to Claude Context</strong>.</span></div>`;
     }
 
-    const phxEntries = Object.entries(ctx.phx || {});
-    const tag = `&lt;${escHtml(ctx.tag)}${ctx.id ? ' id="' + escHtml(ctx.id) + '"' : ""}&gt;`;
-
-    return `<div class="la-card">
-      <div class="la-context-badge">\u2705 Claude can read this via <code>get_pinned_context</code></div>
-      <div class="la-element-tag">${tag}</div>
-      <div class="la-meta">
-        <span class="la-dim">${escHtml(ctx.capturedAt)}</span>
-        <span class="la-dim la-url">${escHtml(ctx.url)}</span>
-      </div>
-
-      ${
-        phxEntries.length
-          ? `<div class="la-section-label">Phoenix</div>
-          <div class="la-attrs">
-            ${phxEntries
-              .map(
-                ([k, v]) =>
-                  `<div class="la-attr"><span class="la-attr-k">${escHtml(k)}</span><span class="la-attr-v">${escHtml(v)}</span></div>`
-              )
-              .join("")}
-          </div>`
-          : ""
-      }
-
-      <div class="la-actions">
-        <button id="la-clear-btn" class="la-btn la-btn-danger">&#10005; Clear</button>
-      </div>
+    const header = `<div class="la-context-header">
+      <div class="la-context-badge">\u2705 Claude can read these via <code>get_pinned_context</code></div>
+      <button id="la-clear-all-pins-btn" class="la-btn la-btn-danger la-btn-sm">&#10005; Clear all</button>
     </div>`;
+
+    const cards = pins.map(({ index, data: ctx }) => {
+      const phxEntries = Object.entries(ctx.phx || {});
+      const tag = `&lt;${escHtml(ctx.tag)}${ctx.id ? ' id="' + escHtml(ctx.id) + '"' : ""}&gt;`;
+      return `<div class="la-card la-pin-card">
+        <div class="la-pin-card-header">
+          <span class="la-pin-number">\ud83d\udccc${index}</span>
+          <button class="la-clear-pin-btn la-btn la-btn-danger la-btn-sm" data-pin-index="${index}">&#10005;</button>
+        </div>
+        <div class="la-element-tag">${tag}</div>
+        <div class="la-meta">
+          <span class="la-dim">${escHtml(ctx.capturedAt)}</span>
+          <span class="la-dim la-url">${escHtml(ctx.url)}</span>
+        </div>
+        ${
+          phxEntries.length
+            ? `<div class="la-section-label">Phoenix</div>
+            <div class="la-attrs">
+              ${phxEntries
+                .map(
+                  ([k, v]) =>
+                    `<div class="la-attr"><span class="la-attr-k">${escHtml(k)}</span><span class="la-attr-v">${escHtml(v)}</span></div>`
+                )
+                .join("")}
+            </div>`
+            : ""
+        }
+      </div>`;
+    }).join("");
+
+    return header + cards;
   }
 
   async function toggleResource(name, btn) {

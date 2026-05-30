@@ -246,10 +246,10 @@ defmodule LiveAgent.MCP.Tools do
       %{
         name: "get_pinned_context",
         description: """
-        Returns the element context that the user explicitly pinned for Claude using the
-        LiveAgent panel's "Pin to Claude Context" button. This is the primary way users
-        share a specific element or UI area they want help with.
-        Returns null if nothing has been pinned yet.
+        Returns all elements the user has pinned for Claude using the LiveAgent panel's
+        "Pin to Claude Context" button. Returns a numbered list (📌1, 📌2, ...) so you can
+        reference each one by number. This is the primary way users share specific elements
+        or UI areas they want help with. Returns an empty list if nothing is pinned yet.
         """,
         inputSchema: %{type: "object", properties: %{}, required: []},
         callback: &get_pinned_context/1
@@ -2046,13 +2046,13 @@ defmodule LiveAgent.MCP.Tools do
   end
 
   defp get_pinned_context(_args) do
-    case LiveAgent.BrowserStateStore.get_pinned_context() do
-      nil ->
+    case LiveAgent.BrowserStateStore.get_pinned_contexts() do
+      [] ->
         {:ok,
          "No context pinned. Ask the user to select an element in the LiveAgent panel and click 'Pin to Claude Context'."}
 
-      context ->
-        {:ok, Jason.encode!(context, pretty: true)}
+      contexts ->
+        {:ok, Jason.encode!(contexts, pretty: true)}
     end
   end
 

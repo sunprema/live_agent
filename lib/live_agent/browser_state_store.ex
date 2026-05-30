@@ -4,7 +4,7 @@ defmodule LiveAgent.BrowserStateStore do
 
   def start_link(_opts), do: GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
 
-  def init(_), do: {:ok, %{selected_element: nil, pinned_context: nil}}
+  def init(_), do: {:ok, %{selected_element: nil, pinned_contexts: []}}
 
   # Public API
 
@@ -17,11 +17,14 @@ defmodule LiveAgent.BrowserStateStore do
   def pin_context,
     do: GenServer.call(__MODULE__, :pin)
 
-  def get_pinned_context,
-    do: GenServer.call(__MODULE__, :get_pin)
+  def get_pinned_contexts,
+    do: GenServer.call(__MODULE__, :get_pins)
 
-  def clear_pinned_context,
-    do: GenServer.call(__MODULE__, :clear_pin)
+  def clear_pinned_context(index),
+    do: GenServer.call(__MODULE__, {:clear_pin, index})
+
+  def clear_all_pinned_contexts,
+    do: GenServer.call(__MODULE__, :clear_all_pins)
 
   # Callbacks
 
@@ -31,12 +34,29 @@ defmodule LiveAgent.BrowserStateStore do
   def handle_call(:get_element, _from, state),
     do: {:reply, state.selected_element, state}
 
-  def handle_call(:pin, _from, state),
-    do: {:reply, :ok, %{state | pinned_context: state.selected_element}}
+  def handle_call(:pin, _from, %{selected_element: nil} = state),
+    do: {:reply, {:error, :no_element}, state}
 
-  def handle_call(:get_pin, _from, state),
-    do: {:reply, state.pinned_context, state}
+  def handle_call(:pin, _from, state) do
+    next_index = length(state.pinned_contexts) + 1
+    entry = Map.put(state.selected_element, :pin_index, next_index)
+    new_contexts = state.pinned_contexts ++ [entry]
+    {:reply, {:ok, next_index}, %{state | pinned_contexts: new_contexts}}
+  end
 
-  def handle_call(:clear_pin, _from, state),
-    do: {:reply, :ok, %{state | pinned_context: nil}}
+  def handle_call(:get_pins, _from, state),
+    do: {:reply, state.pinned_contexts, state}
+
+  def handle_call({:clear_pin, index}, _from, state) do
+    new_contexts =
+      state.pinned_contexts
+      |> Enum.reject(&(&1.pin_index == index))
+      |> Enum.with_index(1)
+      |> Enum.map(fn {entry, i} -> %{entry | pin_index: i} end)
+
+    {:reply, :ok, %{state | pinned_contexts: new_contexts}}
+  end
+
+  def handle_call(:clear_all_pins, _from, state),
+    do: {:reply, :ok, %{state | pinned_contexts: []}}
 end

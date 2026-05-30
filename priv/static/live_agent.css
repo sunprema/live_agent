@@ -657,6 +657,59 @@ a.la-view-link:hover {
   border-radius: 3px;
 }
 
+/* ── Pin badges (overlaid on page elements) ─────────────────────────────────── */
+
+.la-pin-badge {
+  position: absolute;
+  z-index: 2147483647;
+  pointer-events: none;
+  background: #7c3aed;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  font-family: "SF Mono", "Fira Code", monospace;
+  padding: 2px 5px;
+  border-radius: 3px;
+  line-height: 1.4;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+}
+
+/* ── Context pane multi-pin layout ──────────────────────────────────────────── */
+
+.la-context-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.la-context-header .la-context-badge {
+  margin-bottom: 0;
+  flex: 1;
+}
+
+.la-btn-sm {
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
+.la-pin-card {
+  margin-bottom: 8px;
+}
+
+.la-pin-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.la-pin-number {
+  font-size: 13px;
+  font-weight: 700;
+  color: #cba6f7;
+}
+
 /* ── Empty state ────────────────────────────────────────────────────────────── */
 
 .la-empty {
