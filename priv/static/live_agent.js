@@ -447,6 +447,22 @@
     });
   }
 
+  function fetchPinnedContexts() {
+    return fetch(BASE + "/api/pin")
+      .then((r) => r.json())
+      .then((pins) => {
+        if (!Array.isArray(pins) || pins.length === 0) return;
+        state.pinnedContexts = pins.map((entry) => ({
+          index: entry.pin_index,
+          data: entry,
+          domEl: null,
+          badgeEl: null,
+        }));
+        if (state.openPanes.includes("context")) renderPaneContent("context");
+      })
+      .catch(() => {});
+  }
+
   function fetchEvents() {
     fetch(BASE + "/api/events?since=" + state.lastEventId)
       .then((r) => r.json())
@@ -1958,6 +1974,7 @@
       state.visible = true;
       rebuildSplit();
       fetchLiveViews();
+      fetchPinnedContexts();
       state._pollTimer = setInterval(fetchLiveViews, 3000);
       startCommandLoop();
     } else if (state.openByDefault) {
@@ -2042,6 +2059,7 @@
     rebuildSplit();
     applyStatusbarMode();
     fetchLiveViews();
+    fetchPinnedContexts();
     state._pollTimer = setInterval(fetchLiveViews, 3000);
     startCommandLoop();
     try { localStorage.setItem("la-panel-open", "1"); } catch (_) {}

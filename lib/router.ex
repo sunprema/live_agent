@@ -209,6 +209,15 @@ defmodule LiveAgent.Router do
     |> halt()
   end
 
+  get "/api/pin" do
+    contexts = LiveAgent.BrowserStateStore.get_pinned_contexts()
+
+    conn
+    |> put_resp_header("content-type", "application/json")
+    |> send_resp(200, Jason.encode!(contexts))
+    |> halt()
+  end
+
   post "/api/pin" do
     case LiveAgent.BrowserStateStore.pin_context() do
       {:ok, index} ->
