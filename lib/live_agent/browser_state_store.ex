@@ -20,6 +20,9 @@ defmodule LiveAgent.BrowserStateStore do
   def get_pinned_contexts,
     do: GenServer.call(__MODULE__, :get_pins)
 
+  def set_pin_note(index, note),
+    do: GenServer.call(__MODULE__, {:set_pin_note, index, note})
+
   def clear_pinned_context(index),
     do: GenServer.call(__MODULE__, {:clear_pin, index})
 
@@ -46,6 +49,19 @@ defmodule LiveAgent.BrowserStateStore do
 
   def handle_call(:get_pins, _from, state),
     do: {:reply, state.pinned_contexts, state}
+
+  def handle_call({:set_pin_note, index, note}, _from, state) do
+    new_contexts =
+      Enum.map(state.pinned_contexts, fn entry ->
+        cond do
+          entry.pin_index != index -> entry
+          note in [nil, ""] -> Map.delete(entry, :note)
+          true -> Map.put(entry, :note, note)
+        end
+      end)
+
+    {:reply, :ok, %{state | pinned_contexts: new_contexts}}
+  end
 
   def handle_call({:clear_pin, index}, _from, state) do
     new_contexts =

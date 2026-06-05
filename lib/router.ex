@@ -234,6 +234,19 @@ defmodule LiveAgent.Router do
     end
   end
 
+  put "/api/pin/:index/note" do
+    opts = Plug.Parsers.init(parsers: [:json], pass: [], json_decoder: Jason)
+    conn = Plug.Parsers.call(conn, opts)
+    index = String.to_integer(index)
+    note = Map.get(conn.body_params, "note", "")
+    LiveAgent.BrowserStateStore.set_pin_note(index, note)
+
+    conn
+    |> put_resp_header("content-type", "application/json")
+    |> send_resp(200, "{\"ok\":true}")
+    |> halt()
+  end
+
   post "/api/errors" do
     opts = Plug.Parsers.init(parsers: [:json], pass: [], json_decoder: Jason)
     conn = Plug.Parsers.call(conn, opts)

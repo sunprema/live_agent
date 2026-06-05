@@ -439,6 +439,17 @@
     });
   }
 
+  function apiSetPinNote(index, note) {
+    return fetch(BASE + "/api/pin/" + index + "/note", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ note }),
+    }).then(() => {
+      const entry = state.pinnedContexts.find((p) => p.index === index);
+      if (entry) entry.data.note = note;
+    }).catch(() => {});
+  }
+
   function apiClearAllPins() {
     return fetch(BASE + "/api/pin", { method: "DELETE" }).then(() => {
       state.pinnedContexts.forEach(({ badgeEl }) => { if (badgeEl) badgeEl.remove(); });
@@ -2313,6 +2324,20 @@
       });
       const clearAll = el.querySelector("#la-clear-all-pins-btn");
       if (clearAll) clearAll.addEventListener("click", apiClearAllPins);
+      el.querySelectorAll(".la-pin-note").forEach((ta) => {
+        const save = () => {
+          const index = parseInt(ta.dataset.pinIndex, 10);
+          const entry = state.pinnedContexts.find((p) => p.index === index);
+          const note = ta.value.trim();
+          if (entry && (entry.data.note || "") === note) return;
+          apiSetPinNote(index, note);
+        };
+        ta.addEventListener("blur", save);
+        ta.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) ta.blur();
+          e.stopPropagation();
+        });
+      });
     }
 
     if (name === "resources") {
@@ -2562,6 +2587,9 @@
           <span class="la-dim">${escHtml(ctx.capturedAt)}</span>
           <span class="la-dim la-url">${escHtml(ctx.url)}</span>
         </div>
+        <div class="la-section-label">Note for Claude</div>
+        <textarea class="la-pin-note" data-pin-index="${index}" rows="2"
+          placeholder="Optional message for the coding agent, e.g. “this button should be disabled while saving”">${escHtml(ctx.note || "")}</textarea>
         ${
           phxEntries.length
             ? `<div class="la-section-label">Phoenix</div>

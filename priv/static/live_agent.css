@@ -710,6 +710,30 @@ a.la-view-link:hover {
   color: #cba6f7;
 }
 
+.la-pin-note {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 4px;
+  padding: 6px 8px;
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #cdd6f4;
+  background: #11111b;
+  border: 1px solid #313244;
+  border-radius: 6px;
+  resize: vertical;
+}
+
+.la-pin-note:focus {
+  outline: none;
+  border-color: #cba6f7;
+}
+
+.la-pin-note::placeholder {
+  color: #6c7086;
+}
+
 /* ── Empty state ────────────────────────────────────────────────────────────── */
 
 .la-empty {

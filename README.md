@@ -30,7 +30,7 @@ The panel has eight panels, each toggled independently from the launcher bar —
 | --------------- | ------------------------------------------------------------------------------------------ |
 | **LiveViews**   | All active LiveView processes — click `▶` to expand assigns inline                         |
 | **Selected**    | The DOM element you picked with the element picker, with component resolution              |
-| **Context**     | Elements you've pinned for Claude, numbered 📌1, 📌2 … — each pin shows a badge overlay on the element in the page |
+| **Context**     | Elements you've pinned for Claude, numbered 📌1, 📌2 … — each pin shows a badge overlay on the element in the page and has a **Note for Claude** textbox where you can type an optional message for the coding agent |
 | **Events**      | Live log of `handle_event`, `mount`, `handle_params`, and `handle_info` calls              |
 | **Timeline**    | Ordered list of assigns transitions per LiveView — trigger, diff counts, click to expand   |
 | **Async**       | In-flight `start_async` / `assign_async` tasks with live elapsed time, plus a completion history per LiveView |
@@ -43,7 +43,7 @@ The top-right of the bar also has the **Drive** toggle and the **agent control s
 
 **Statusbar checkbox** — next to **Drive**. Collapses the panel to just the toolbar strip (~36px tall), hiding the panes below and giving that vertical space back to the host app. The checked state is remembered per browser (localStorage). Clicking any panel button or the resize (↕) button automatically unchecks it so the panes can render again.
 
-**Element picker** — click **🔍 Pick**, then click any element on the page. LiveAgent captures its HTML, CSS classes, and Phoenix attributes (`phx-click`, `data-phx-component`, etc.). If the element belongs to a LiveComponent, the **Selected** panel automatically shows the component module, its `id`, and its current assign keys — resolved directly from the running BEAM process. Click **📋 Pin to Claude Context** to pin the element — you can pin multiple elements (📌1, 📌2, …) and each gets a numbered badge overlaid on it in the page. All pinned elements are available to Claude via `get_pinned_context` at once, so you can pin a "source" element and a "target" element and ask Claude to mirror a change from one to the other.
+**Element picker** — click **🔍 Pick**, then click any element on the page. LiveAgent captures its HTML, CSS classes, and Phoenix attributes (`phx-click`, `data-phx-component`, etc.). If the element belongs to a LiveComponent, the **Selected** panel automatically shows the component module, its `id`, and its current assign keys — resolved directly from the running BEAM process. Click **📋 Pin to Claude Context** to pin the element — you can pin multiple elements (📌1, 📌2, …) and each gets a numbered badge overlaid on it in the page. All pinned elements are available to Claude via `get_pinned_context` at once, so you can pin a "source" element and a "target" element and ask Claude to mirror a change from one to the other. Each pinned card in the **Context** panel has a **Note for Claude** textbox — type an optional message (e.g. _"this button should be disabled while saving"_) and it's saved on blur (or ⌘/Ctrl+Enter) and delivered to Claude alongside the element data.
 
 **Resources tab** — lists every Ash resource loaded in the running app. Click `▶` on any resource to expand a full breakdown: attributes with types and constraints, actions with their accepted fields and arguments, relationships with destination resources, and any calculations or aggregates. Loaded once when the tab is first opened. Requires Ash to be installed — the tab is still shown but displays a message if Ash is not available.
 
@@ -78,7 +78,7 @@ Claude Code can call these tools while you work:
 | `get_async_event`       | Single async history entry by id                                                |
 | `watch_assigns`         | Snapshot assigns at this moment (call repeatedly to track changes)              |
 | `get_selected_element`  | Returns the element most recently picked in the browser panel                   |
-| `get_pinned_context`    | Returns the element the user explicitly pinned for Claude                       |
+| `get_pinned_context`    | Returns all elements the user pinned for Claude, each with an optional user-written note |
 | `get_panel_status`      | Reports panel readiness — `ready`, `last_seen_age_ms`, `document_ready`, `live_socket_connected`, `root_lv_present`, `generation`, `url`, `reason`. Browser-bound tools auto-wait for readiness; call this when a command timed out to see why. |
 | `get_component_tree`    | LiveComponent tree for the current page — modules, ids, assign keys, events, forms (id + phx-submit/phx-change), named inputs, and buttons with their text and phx-click. Use this before calling `click`/`fill`/`submit` to pick the right target. |
 | `list_ash_resources`    | Lists all Ash resources with attributes, actions, and relationships (Ash only)  |
@@ -412,9 +412,10 @@ No instrumentation required in your LiveViews — it works with any existing Pho
 3. Click **🔍 Pick** and select any element on the page
 4. Click **📋 Pin to Claude Context** — a numbered badge (📌1) appears on the element
 5. Pick and pin more elements if needed (📌2, 📌3, …)
-6. Ask Claude: _"Add a Status column to this table"_ or _"Make the sidebar match the card style I pinned"_
+6. Optionally type a message in the pin's **Note for Claude** textbox in the Context panel — e.g. _"align this with the header"_
+7. Ask Claude: _"Add a Status column to this table"_ or _"Make the sidebar match the card style I pinned"_
 
-Claude calls `get_pinned_context`, gets all pinned elements' HTML and Phoenix metadata, finds the `.heex` templates, and makes the change.
+Claude calls `get_pinned_context`, gets all pinned elements' HTML, Phoenix metadata, and your notes, finds the `.heex` templates, and makes the change.
 
 ### Via the Events tab
 
