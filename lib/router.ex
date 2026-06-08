@@ -404,6 +404,46 @@ defmodule LiveAgent.Router do
     |> halt()
   end
 
+  get "/api/scratchpad" do
+    snapshots = LiveAgent.ScratchpadStore.list_snapshots()
+
+    conn
+    |> put_resp_header("content-type", "application/json")
+    |> send_resp(200, Jason.encode!(snapshots))
+    |> halt()
+  end
+
+  post "/api/scratchpad" do
+    opts = Plug.Parsers.init(parsers: [:json], pass: [], json_decoder: Jason)
+    conn = Plug.Parsers.call(conn, opts)
+    pid = Map.get(conn.body_params, "pid")
+    name = Map.get(conn.body_params, "name")
+    note = Map.get(conn.body_params, "note")
+
+    case LiveAgent.ScratchpadStore.save(name, pid, note) do
+      :ok ->
+        conn
+        |> put_resp_header("content-type", "application/json")
+        |> send_resp(200, Jason.encode!(%{ok: true, name: name}))
+        |> halt()
+
+      {:error, reason} ->
+        conn
+        |> put_resp_header("content-type", "application/json")
+        |> send_resp(400, Jason.encode!(%{ok: false, error: inspect(reason)}))
+        |> halt()
+    end
+  end
+
+  delete "/api/scratchpad/:name" do
+    LiveAgent.ScratchpadStore.delete(conn.path_params["name"])
+
+    conn
+    |> put_resp_header("content-type", "application/json")
+    |> send_resp(200, "{\"ok\":true}")
+    |> halt()
+  end
+
   # Agent control: long-poll for commands the MCP side has enqueued.
   # Panel piggybacks its readiness signal via query params (gen, doc, lv,
   # main, url) so the server always knows whether a panel is parked and

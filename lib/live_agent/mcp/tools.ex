@@ -1009,6 +1009,93 @@ defmodule LiveAgent.MCP.Tools do
           required: []
         },
         callback: &list_lv_routes/1
+      },
+      %{
+        name: "scratchpad_save",
+        description: """
+        Saves the current assigns of a LiveView as a named snapshot in the scratchpad.
+        Use this to capture a "before" state before making code changes.
+        Snapshots survive LiveView restarts (PID changes) because they are stored by name,
+        not by PID. Re-using an existing name overwrites the previous snapshot.
+
+        Pass a `note` to document why you are saving and what comparison you plan to make.
+        The note is stored with the snapshot and returned by scratchpad_get and scratchpad_list,
+        so you can recall your intent when retrieving the snapshot later.
+        """,
+        inputSchema: %{
+          type: "object",
+          required: ["pid", "name"],
+          properties: %{
+            pid: %{type: "string", description: "PID string from list_live_views, e.g. \"<0.123.0>\""},
+            name: %{type: "string", description: "Label for this snapshot, e.g. \"before_pagination\""},
+            note: %{
+              type: "string",
+              description: "Optional note explaining why this snapshot was saved and what it will be compared against"
+            }
+          }
+        },
+        callback: &scratchpad_save/1
+      },
+      %{
+        name: "scratchpad_list",
+        description: """
+        Lists all saved scratchpad snapshots. Returns name, note, view, url, saved_at, and assign_keys
+        for each snapshot (without the full assigns data). Use scratchpad_get to retrieve full assigns.
+        """,
+        inputSchema: %{type: "object", properties: %{}, required: []},
+        callback: &scratchpad_list/1
+      },
+      %{
+        name: "scratchpad_get",
+        description: """
+        Returns the full assigns map stored in a named scratchpad snapshot, along with the saved note.
+        Use scratchpad_list to see available names.
+        """,
+        inputSchema: %{
+          type: "object",
+          required: ["name"],
+          properties: %{
+            name: %{type: "string", description: "Snapshot name from scratchpad_list"}
+          }
+        },
+        callback: &scratchpad_get/1
+      },
+      %{
+        name: "scratchpad_compare",
+        description: """
+        Compares a saved scratchpad snapshot against either:
+          - the current LiveView assigns (pass `pid`) — useful for "before my change vs now"
+          - another snapshot (pass `other_snapshot_name`) — useful for "before vs after"
+
+        Pass exactly one of `pid` or `other_snapshot_name`.
+
+        Returns a diff with `changed`, `added`, and `removed` keys. Large diffs are summarized by key name.
+        """,
+        inputSchema: %{
+          type: "object",
+          required: ["snapshot_name"],
+          properties: %{
+            snapshot_name: %{type: "string", description: "The baseline snapshot to diff from"},
+            pid: %{type: "string", description: "PID of a live LiveView to diff against (optional)"},
+            other_snapshot_name: %{
+              type: "string",
+              description: "Name of a second snapshot to diff against (optional)"
+            }
+          }
+        },
+        callback: &scratchpad_compare/1
+      },
+      %{
+        name: "scratchpad_delete",
+        description: "Removes a named scratchpad snapshot. Call scratchpad_list to see available names.",
+        inputSchema: %{
+          type: "object",
+          required: ["name"],
+          properties: %{
+            name: %{type: "string", description: "Snapshot name to remove"}
+          }
+        },
+        callback: &scratchpad_delete/1
       }
     ]
   end
@@ -2885,4 +2972,146 @@ defmodule LiveAgent.MCP.Tools do
     Resolved: #{Jason.encode!(resolved, pretty: true)}
     """
   end
+
+  # --- Scratchpad callbacks ---
+
+  defp scratchpad_save(%{"pid" => pid, "name" => name} = args)
+       when is_binary(pid) and is_binary(name) and name != "" do
+    note = Map.get(args, "note")
+
+    case LiveAgent.ScratchpadStore.save(name, pid, note) do
+      :ok ->
+        {:ok,
+         "Snapshot #{inspect(name)} saved." <>
+           if(note, do: " Note: #{note}", else: "") <>
+           " Call scratchpad_list to see all snapshots, or scratchpad_compare to diff."}
+
+      {:error, reason} ->
+        {:error, "Failed to save snapshot: #{inspect(reason)}. Call list_live_views to get a valid pid."}
+    end
+  end
+
+  defp scratchpad_save(_),
+    do: {:error, "scratchpad_save requires 'pid' (string) and 'name' (non-empty string)"}
+
+  defp scratchpad_list(_args) do
+    case LiveAgent.ScratchpadStore.list_snapshots() do
+      [] ->
+        {:ok, "No snapshots saved. Use scratchpad_save to capture a named snapshot of LiveView assigns."}
+
+      snapshots ->
+        text =
+          snapshots
+          |> Enum.with_index(1)
+          |> Enum.map(fn {s, i} ->
+            keys_preview = s.assign_keys |> Enum.take(10) |> Enum.join(", ")
+            more = if length(s.assign_keys) > 10, do: " (+#{length(s.assign_keys) - 10} more)", else: ""
+            note_line = if s.note, do: "\n     Note:      #{s.note}", else: ""
+
+            "#{i}. #{inspect(s.name)}" <>
+              note_line <>
+              "\n     View:      #{s.view}" <>
+              "\n     URL:       #{s.url || "(none)"}" <>
+              "\n     Saved at:  #{s.saved_at}" <>
+              "\n     Assigns:   [#{keys_preview}#{more}]"
+          end)
+          |> Enum.join("\n\n")
+
+        {:ok, "#{length(snapshots)} snapshot(s):\n\n#{text}"}
+    end
+  end
+
+  defp scratchpad_get(%{"name" => name}) when is_binary(name) do
+    case LiveAgent.ScratchpadStore.get(name) do
+      {:ok, snapshot} ->
+        note_line = if snapshot.note, do: "\nNote: #{snapshot.note}", else: ""
+
+        header =
+          "Snapshot #{inspect(name)} — #{snapshot.view} at #{snapshot.saved_at}#{note_line}\n\n"
+
+        {:ok, header <> Jason.encode!(snapshot.assigns, pretty: true)}
+
+      {:error, :not_found} ->
+        {:error, "No snapshot named #{inspect(name)}. Call scratchpad_list to see available names."}
+    end
+  end
+
+  defp scratchpad_get(_), do: {:error, "scratchpad_get requires 'name' (string)"}
+
+  defp scratchpad_compare(%{"snapshot_name" => snap_name} = args) when is_binary(snap_name) do
+    case LiveAgent.ScratchpadStore.get(snap_name) do
+      {:ok, base_snapshot} ->
+        cond do
+          Map.has_key?(args, "pid") ->
+            compare_snapshot_to_pid(base_snapshot, Map.get(args, "pid"))
+
+          Map.has_key?(args, "other_snapshot_name") ->
+            compare_snapshot_to_snapshot(base_snapshot, Map.get(args, "other_snapshot_name"))
+
+          true ->
+            {:error, "scratchpad_compare requires one of 'pid' or 'other_snapshot_name'"}
+        end
+
+      {:error, :not_found} ->
+        {:error,
+         "No snapshot named #{inspect(snap_name)}. Call scratchpad_list to see available names."}
+    end
+  end
+
+  defp scratchpad_compare(_),
+    do:
+      {:error,
+       "scratchpad_compare requires 'snapshot_name' plus one of 'pid' or 'other_snapshot_name'"}
+
+  defp compare_snapshot_to_pid(base_snapshot, pid) when is_binary(pid) do
+    case SocketInspector.get_assigns(pid) do
+      {:ok, current_assigns} ->
+        diff =
+          LiveAgent.AssignsDiff.diff(base_snapshot.assigns, current_assigns)
+          |> LiveAgent.AssignsDiff.bound_size()
+
+        format_scratchpad_diff(base_snapshot.name, base_snapshot.saved_at, "live #{pid}", diff)
+
+      {:error, reason} ->
+        {:error,
+         "Could not read assigns for #{pid}: #{inspect(reason)}. Call list_live_views to confirm pid."}
+    end
+  end
+
+  defp compare_snapshot_to_snapshot(base_snapshot, other_name) when is_binary(other_name) do
+    case LiveAgent.ScratchpadStore.get(other_name) do
+      {:ok, other_snapshot} ->
+        diff =
+          LiveAgent.AssignsDiff.diff(base_snapshot.assigns, other_snapshot.assigns)
+          |> LiveAgent.AssignsDiff.bound_size()
+
+        format_scratchpad_diff(
+          base_snapshot.name,
+          base_snapshot.saved_at,
+          "snapshot #{inspect(other_name)}",
+          diff
+        )
+
+      {:error, :not_found} ->
+        {:error,
+         "No snapshot named #{inspect(other_name)} for comparison. Call scratchpad_list."}
+    end
+  end
+
+  defp format_scratchpad_diff(from_name, from_at, to_label, diff) do
+    if LiveAgent.AssignsDiff.empty?(diff) do
+      {:ok,
+       "No differences between snapshot #{inspect(from_name)} (#{from_at}) and #{to_label}."}
+    else
+      header = "Diff: #{inspect(from_name)} (#{from_at}) → #{to_label}\n\n"
+      {:ok, header <> Jason.encode!(diff, pretty: true)}
+    end
+  end
+
+  defp scratchpad_delete(%{"name" => name}) when is_binary(name) do
+    LiveAgent.ScratchpadStore.delete(name)
+    {:ok, "Snapshot #{inspect(name)} deleted (or did not exist)."}
+  end
+
+  defp scratchpad_delete(_), do: {:error, "scratchpad_delete requires 'name' (string)"}
 end

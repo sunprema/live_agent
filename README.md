@@ -77,6 +77,7 @@ Claude Code can call these tools while you work:
 | `get_async_history`     | Recent completed async tasks for a LiveView with duration, result, and a cross-link to the state timeline |
 | `get_async_event`       | Single async history entry by id                                                |
 | `watch_assigns`         | Snapshot assigns at this moment (call repeatedly to track changes)              |
+| `reset_watch`           | Clears the stored `watch_assigns` baseline for a PID so the next `diff`-mode call starts fresh |
 | `get_selected_element`  | Returns the element most recently picked in the browser panel                   |
 | `get_pinned_context`    | Returns all elements the user pinned for Claude, each with an optional user-written note |
 | `get_panel_status`      | Reports panel readiness — `ready`, `last_seen_age_ms`, `document_ready`, `live_socket_connected`, `root_lv_present`, `generation`, `url`, `reason`. Browser-bound tools auto-wait for readiness; call this when a command timed out to see why. |
@@ -106,6 +107,11 @@ Claude Code can call these tools while you work:
 | `get_browser_logs`      | Returns a tail of `console.{log,info,warn,error,debug}` output captured from the host page. Useful when a browser command fails silently. Filterable by `levels` and `since_id`. Ring buffer of last 500 entries; LiveAgent's own calls are excluded. |
 | `clear_browser_logs`    | Clears the browser console log buffer. |
 | `list_lv_routes`        | Lists every Phoenix LiveView route in every router loaded in the running VM — path, LiveView module, `live_action`, `live_session`, and parent router. Filter by router substring or path prefix. Use before `navigate` to find the right path. |
+| `scratchpad_save`       | Saves the current assigns of a LiveView as a named snapshot. Pass a `note` to document why and what comparison is planned — the note is stored with the snapshot and shown on retrieval. Snapshots survive LiveView PID changes (code reloads). |
+| `scratchpad_list`       | Lists all saved scratchpad snapshots with name, note, view, url, saved_at, and assign key summaries. |
+| `scratchpad_get`        | Returns the full assigns map of a named snapshot along with its note. |
+| `scratchpad_compare`    | Diffs a snapshot against live assigns (pass `pid`) or another snapshot (pass `other_snapshot_name`). Returns changed/added/removed keys — the core "before my change vs now" tool. |
+| `scratchpad_delete`     | Removes a named snapshot. |
 
 **Optional tools** (enabled per plug option — see [Options](#options)):
 
@@ -346,6 +352,7 @@ Claude Code will connect to LiveAgent over HTTP while your app is running. No se
 - Runs a `BrowserStateStore` GenServer to hold the current selected element and pinned context
 - Runs an `EventStore` GenServer that subscribes to Phoenix's built-in telemetry events and keeps a ring buffer of the last 200
 - Runs a `StateTimeline` GenServer that records assigns transitions per LiveView pid (up to 50 entries each), keyed off the same telemetry events
+- Runs a `ScratchpadStore` GenServer that holds named assigns snapshots (up to 50), keyed by name rather than PID so they survive code reloads
 
 ### State Timeline
 
@@ -605,6 +612,30 @@ For "what's loading right now" and "what async work just finished":
 - _"The dashboard shows the wrong user. When did `current_user` get set?"_ →
   Claude finds the `handle_async` entry in the state timeline (via the
   async history's `state_timeline_id` cross-link) and shows the diff.
+
+### Via the scratchpad (before/after snapshots)
+
+The state timeline answers "what just changed"; the scratchpad answers "is the
+state different from how it was *before* I touched the code." It captures a
+named snapshot of a LiveView's assigns that **survives code reloads** — because
+snapshots are keyed by name, not PID, the "before" you saved is still there
+after Phoenix restarts the process.
+
+1. **Capture the baseline.** _"Snapshot the dashboard assigns as
+   `before_refactor` — I'm about to change how the cart total is computed."_ →
+   Claude calls `scratchpad_save(pid, name: "before_refactor", note: "...")`. The
+   `note` records the intent and comes back on retrieval.
+2. **Make the change.** Edit the LiveView / component (which reloads the process).
+3. **Diff it.** _"Did anything other than `cart.total` change?"_ →
+   `scratchpad_compare(snapshot_name: "before_refactor", pid: "<new pid>")`
+   returns `changed` / `added` / `removed` keys against the *live* assigns.
+
+You can also diff two saved snapshots (`scratchpad_compare(snapshot_name: "a",
+other_snapshot_name: "b")`) to compare two captured points in time.
+`scratchpad_list` shows every snapshot with its note and assign-key summary,
+`scratchpad_get` dumps a snapshot's full assigns, and `scratchpad_delete`
+removes one. Up to 50 snapshots are kept (oldest dropped); re-using a name
+overwrites it.
 
 ---
 
