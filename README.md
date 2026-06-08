@@ -26,16 +26,16 @@ LiveAgent auto-injects a **bottom panel** into every page of your app (dev only)
 
 The panel has eight panels, each toggled independently from the launcher bar — open as many as you want side by side:
 
-| Panel           | What it shows                                                                              |
-| --------------- | ------------------------------------------------------------------------------------------ |
-| **LiveViews**   | All active LiveView processes — click `▶` to expand assigns inline                         |
-| **Selected**    | The DOM element you picked with the element picker, with component resolution              |
+| Panel           | What it shows                                                                                                                                                                                                        |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **LiveViews**   | All active LiveView processes — click `▶` to expand assigns inline                                                                                                                                                   |
+| **Selected**    | The DOM element you picked with the element picker, with component resolution                                                                                                                                        |
 | **Context**     | Elements you've pinned for Claude, numbered 📌1, 📌2 … — each pin shows a badge overlay on the element in the page and has a **Note for Claude** textbox where you can type an optional message for the coding agent |
-| **Events**      | Live log of `handle_event`, `mount`, `handle_params`, and `handle_info` calls              |
-| **Timeline**    | Ordered list of assigns transitions per LiveView — trigger, diff counts, click to expand   |
-| **Async**       | In-flight `start_async` / `assign_async` tasks with live elapsed time, plus a completion history per LiveView |
-| **Resources**   | All Ash resources — click `▶` to expand attributes, actions, and relationships             |
-| **Screenshots** | Thumbnails of recent `take_screenshot` captures — click to open full-size in a new tab, or Download as PNG |
+| **Events**      | Live log of `handle_event`, `mount`, `handle_params`, and `handle_info` calls                                                                                                                                        |
+| **Timeline**    | Ordered list of assigns transitions per LiveView — trigger, diff counts, click to expand                                                                                                                             |
+| **Async**       | In-flight `start_async` / `assign_async` tasks with live elapsed time, plus a completion history per LiveView                                                                                                        |
+| **Resources**   | All Ash resources — click `▶` to expand attributes, actions, and relationships                                                                                                                                       |
+| **Screenshots** | Thumbnails of recent `take_screenshot` captures — click to open full-size in a new tab, or Download as PNG                                                                                                           |
 
 Click any panel button in the top bar to open or close it. Drag the divider between open panels to resize them. Click **↗** to open the whole panel in a new tab.
 
@@ -49,11 +49,12 @@ The top-right of the bar also has the **Drive** toggle and the **agent control s
 
 **Events tab** — shows a scrolling log of LiveView telemetry events as they happen. Each row displays the event type, event name (for `handle_event`), the LiveView or LiveComponent that handled it, duration, and how long ago it occurred. Click any row to expand the params or error details. Duration is color-coded: green under 10ms, amber 10–100ms, red over 100ms. Exceptions are highlighted in red. The log holds the last 200 events and can be cleared with the Clear button.
 
-**Timeline tab** — groups recent assigns *transitions* by LiveView, newest first. Each row shows the trigger (`mount` / `handle_event` / `handle_params` / `live_component_event` / `handle_async` / `unknown`), the diff counts (`N changed, M added, K removed`), and the duration. Click any row to expand the full diff with `before`/`after` values. Unknown rows mean a render happened without a matching callback telemetry — almost always a `handle_info` (PubSub, `send_after`, etc.) since Phoenix doesn't emit telemetry for `handle_info`. (`handle_async` entries also start as "unknown" and are relabelled by the Async inspector when it sees the matching task exit.) Up to 50 entries per LiveView are kept in memory; processes that exit are dropped after a 60s grace period.
+**Timeline tab** — groups recent assigns _transitions_ by LiveView, newest first. Each row shows the trigger (`mount` / `handle_event` / `handle_params` / `live_component_event` / `handle_async` / `unknown`), the diff counts (`N changed, M added, K removed`), and the duration. Click any row to expand the full diff with `before`/`after` values. Unknown rows mean a render happened without a matching callback telemetry — almost always a `handle_info` (PubSub, `send_after`, etc.) since Phoenix doesn't emit telemetry for `handle_info`. (`handle_async` entries also start as "unknown" and are relabelled by the Async inspector when it sees the matching task exit.) Up to 50 entries per LiveView are kept in memory; processes that exit are dropped after a 60s grace period.
 
 **Screenshots tab** — every call to `take_screenshot` (whether you triggered it from Claude or anywhere else) is captured into this pane as a thumbnail. Click a thumbnail or the **Open** button to view full-size in a new tab; **Download** saves a PNG locally. The same image is also written to `/tmp/live_agent_screenshot_<timestamp>.png` server-side. The panel keeps the most recent 12 captures in memory — older ones are dropped when the limit is reached. **Clear** wipes the in-memory list (does not delete the `/tmp` files).
 
 **Async tab** — per LiveView, three sections:
+
 - **In flight** — tasks currently running, with the registry kind (`start` / `assign` / `stream`), task pid, and a live-updating elapsed time.
 - **AsyncResult assigns** — every assign holding a `%Phoenix.LiveView.AsyncResult{}`, with its `loading` / `ok?` / `failed` state.
 - **History** — completed tasks newest first, with duration, success/exit status, and a `→ timeline #N` link to the corresponding entry in the Timeline pane.
@@ -64,64 +65,64 @@ Up to 25 history entries per LiveView are kept; the inspector polls `socket.priv
 
 Claude Code can call these tools while you work:
 
-| Tool                    | Description                                                                     |
-| ----------------------- | ------------------------------------------------------------------------------- |
-| `list_live_views`       | Lists all active LiveView processes (PID, view module, assign keys). Marks the **connected root** — the live view on screen — and sorts it first, so follow-up tools (incl. after an `act_as` reload) target the right PID. |
-| `get_assigns`           | Returns the full assigns map for a LiveView — the live data on screen           |
-| `get_assign`            | Returns a single assign value by key                                            |
-| `get_socket_info`       | Returns full socket metadata (view, IDs, transport, assigns)                    |
-| `get_scope`             | Returns the security scope bound to a LiveView — actor (current user), tenant/organization, and Ash scope context. Call before any `project_eval`/SQL on tenant-scoped data so the query reproduces the user's exact authorization boundary. |
-| `get_state_history`     | Recent assigns transitions for a LiveView — trigger, diff, duration, exception. Answers "why did X change?" without re-running the flow. |
-| `get_state_event`       | Full diff for one timeline entry by id (drill into `get_state_history` results) |
-| `list_async_tasks`      | "What's loading right now" for a LiveView — pending `start_async`/`assign_async` tasks and any `%AsyncResult{}` values in assigns |
-| `get_async_history`     | Recent completed async tasks for a LiveView with duration, result, and a cross-link to the state timeline |
-| `get_async_event`       | Single async history entry by id                                                |
-| `watch_assigns`         | Snapshot assigns at this moment (call repeatedly to track changes)              |
-| `reset_watch`           | Clears the stored `watch_assigns` baseline for a PID so the next `diff`-mode call starts fresh |
-| `get_selected_element`  | Returns the element most recently picked in the browser panel                   |
-| `get_pinned_context`    | Returns all elements the user pinned for Claude, each with an optional user-written note |
-| `get_panel_status`      | Reports panel readiness — `ready`, `last_seen_age_ms`, `document_ready`, `live_socket_connected`, `root_lv_present`, `generation`, `url`, `reason`. Browser-bound tools auto-wait for readiness; call this when a command timed out to see why. |
-| `get_component_tree`    | LiveComponent tree for the current page — modules, ids, assign keys, events, forms (id + phx-submit/phx-change), named inputs, and buttons with their text and phx-click. Use this before calling `click`/`fill`/`submit` to pick the right target. |
-| `list_ash_resources`    | Lists all Ash resources with attributes, actions, and relationships (Ash only)  |
-| `get_ash_resource_info` | Full introspection of a single Ash resource — types, constraints, actions, etc. |
-| `highlight_element`     | Draws a Chrome DevTools-style overlay on an element in the user's browser (by cid / CSS selector / visible text). Requires the panel to be open. |
-| `clear_highlight`       | Removes any active highlight overlay                                            |
-| `click`                 | Clicks an element in the user's browser (by cid / selector / text). Requires the panel open and the **Drive** toggle ON. Returns URL/view/flash and a server-side assigns diff. |
-| `navigate`              | Navigates the browser to a path. Modes: `auto` (default — resolves via the host router: `patch` for same-LV with `handle_params/3`, `navigate` for cross-LV or LVs without `handle_params/3`, `href` for non-LV routes), `patch`, `navigate`, `href`. Requires **Drive** ON. |
-| `fill`                  | Sets a form input's value and dispatches `input`+`change` (so `phx-change` fires). Handles text/select/textarea, checkboxes, radios, and contenteditable. Requires **Drive** ON. |
-| `submit`                | Submits a form via `form.requestSubmit()` (triggers `phx-submit` + HTML5 validation). Target can be the form or any element inside it. Requires **Drive** ON. |
+| Tool                    | Description                                                                                                                                                                                                                                                                                                                   |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list_live_views`       | Lists all active LiveView processes (PID, view module, assign keys). Marks the **connected root** — the live view on screen — and sorts it first, so follow-up tools (incl. after an `act_as` reload) target the right PID.                                                                                                   |
+| `get_assigns`           | Returns the full assigns map for a LiveView — the live data on screen                                                                                                                                                                                                                                                         |
+| `get_assign`            | Returns a single assign value by key                                                                                                                                                                                                                                                                                          |
+| `get_socket_info`       | Returns full socket metadata (view, IDs, transport, assigns)                                                                                                                                                                                                                                                                  |
+| `get_scope`             | Returns the security scope bound to a LiveView — actor (current user), tenant/organization, and Ash scope context. Call before any `project_eval`/SQL on tenant-scoped data so the query reproduces the user's exact authorization boundary.                                                                                  |
+| `get_state_history`     | Recent assigns transitions for a LiveView — trigger, diff, duration, exception. Answers "why did X change?" without re-running the flow.                                                                                                                                                                                      |
+| `get_state_event`       | Full diff for one timeline entry by id (drill into `get_state_history` results)                                                                                                                                                                                                                                               |
+| `list_async_tasks`      | "What's loading right now" for a LiveView — pending `start_async`/`assign_async` tasks and any `%AsyncResult{}` values in assigns                                                                                                                                                                                             |
+| `get_async_history`     | Recent completed async tasks for a LiveView with duration, result, and a cross-link to the state timeline                                                                                                                                                                                                                     |
+| `get_async_event`       | Single async history entry by id                                                                                                                                                                                                                                                                                              |
+| `watch_assigns`         | Snapshot assigns at this moment (call repeatedly to track changes)                                                                                                                                                                                                                                                            |
+| `reset_watch`           | Clears the stored `watch_assigns` baseline for a PID so the next `diff`-mode call starts fresh                                                                                                                                                                                                                                |
+| `get_selected_element`  | Returns the element most recently picked in the browser panel                                                                                                                                                                                                                                                                 |
+| `get_pinned_context`    | Returns all elements the user pinned for Claude, each with an optional user-written note                                                                                                                                                                                                                                      |
+| `get_panel_status`      | Reports panel readiness — `ready`, `last_seen_age_ms`, `document_ready`, `live_socket_connected`, `root_lv_present`, `generation`, `url`, `reason`. Browser-bound tools auto-wait for readiness; call this when a command timed out to see why.                                                                               |
+| `get_component_tree`    | LiveComponent tree for the current page — modules, ids, assign keys, events, forms (id + phx-submit/phx-change), named inputs, and buttons with their text and phx-click. Use this before calling `click`/`fill`/`submit` to pick the right target.                                                                           |
+| `list_ash_resources`    | Lists all Ash resources with attributes, actions, and relationships (Ash only)                                                                                                                                                                                                                                                |
+| `get_ash_resource_info` | Full introspection of a single Ash resource — types, constraints, actions, etc.                                                                                                                                                                                                                                               |
+| `highlight_element`     | Draws a Chrome DevTools-style overlay on an element in the user's browser (by cid / CSS selector / visible text). Requires the panel to be open.                                                                                                                                                                              |
+| `clear_highlight`       | Removes any active highlight overlay                                                                                                                                                                                                                                                                                          |
+| `click`                 | Clicks an element in the user's browser (by cid / selector / text). Requires the panel open and the **Drive** toggle ON. Returns URL/view/flash and a server-side assigns diff.                                                                                                                                               |
+| `navigate`              | Navigates the browser to a path. Modes: `auto` (default — resolves via the host router: `patch` for same-LV with `handle_params/3`, `navigate` for cross-LV or LVs without `handle_params/3`, `href` for non-LV routes), `patch`, `navigate`, `href`. Requires **Drive** ON.                                                  |
+| `fill`                  | Sets a form input's value and dispatches `input`+`change` (so `phx-change` fires). Handles text/select/textarea, checkboxes, radios, and contenteditable. Requires **Drive** ON.                                                                                                                                              |
+| `submit`                | Submits a form via `form.requestSubmit()` (triggers `phx-submit` + HTML5 validation). Target can be the form or any element inside it. Requires **Drive** ON.                                                                                                                                                                 |
 | `send_event`            | Fires a named `handle_event` on a LiveView **server-side** by injecting the same `"event"` message the JS client sends — no browser, panel, or **Drive** needed, and it works on plain LiveViews. Use it for events not bound to a clickable element (custom params, keyboard events). Returns the before/after assigns diff. |
-| `act_as`                | Logs the browser session in as a chosen user/persona so the driving tools then run **as that actor** — the one-call alternative to the login dance, built for testing org isolation. Returns the reconnected scope. Dev/test only; requires a `:act_as` closure + `:session_options` config and **Drive** ON. |
-| `wait_for`              | Blocks until a condition is met. Modes: `{assign: {pid, key, equals?}}` polls a LiveView assign server-side (panel not required); `{selector}` / `{text}` use a browser MutationObserver. Default `timeout_ms` 5000. |
-| `take_screenshot`       | Captures the browser to a PNG in `/tmp`. Optionally clip to one element by `selector` / `cid` / `text`; the result reports the captured rect. The panel UI is excluded. |
-| `screenshot_baseline`   | Captures now and saves it as a named baseline under `screenshots/baselines/<name>.png` — the "before" for a visual diff. Honors the same element-clip args. |
-| `screenshot_diff`       | Compares the current screen to a named baseline and returns `changed_ratio`, merged `changed_boxes`, `dims_match?`, and an `overlay_path` (baseline with changed pixels tinted red) instead of two full images. AA-aware; tune via `threshold` / `include_aa`. |
-| `expect_assign`         | Assertion sibling of `get_assign`: returns `{pass, path, expected, actual, waited_ms}` for an assign (dot-path supported) via `equals` or `matches`, instead of dumping state to eyeball. `timeout_ms > 0` polls until it passes (async settle); a failure is `pass: false`, not an error. |
-| `expect_no_errors`      | Assertion gate over the error log — `pass` only if no errors recorded (optionally since a `since_id`). Pattern: `clear_errors` → act → `expect_no_errors`. Returns `{pass, count, errors}`. |
-| `get_errors`            | Returns JS and server errors collected since the server started — uncaught exceptions, unhandled Promise rejections, and LiveView callback exceptions. Each error has a `source` ("js" or "server"), message, stacktrace, and timestamp. Pass `since_id` to fetch only new errors. |
-| `clear_errors`          | Clears the error buffer. Use before reproducing an issue so `expect_no_errors` only sees new errors. |
-| `inject_css`            | Injects a CSS rule block directly into the user's browser page without touching source files. Use to prototype style fixes visually, then write the confirmed fix to the actual stylesheet. Pass an `id` to label injections so you can revert by name. Requires the panel open. |
-| `revert_css`            | Removes previously injected CSS. Pass `id` to remove a specific injection or omit to remove all. Requires the panel open. |
-| `scroll_to`             | Scrolls the browser page to bring an element into view by CSS selector. Useful before `take_screenshot` to capture below-the-fold content. Requires the panel open. |
-| `get_computed_styles`   | Returns the browser's resolved computed CSS for an element — final values after all stylesheets, inheritance, and cascade. Also returns the element's bounding rect. Pass a `properties` list to fetch only specific CSS properties. Requires the panel open. |
-| `get_browser_logs`      | Returns a tail of `console.{log,info,warn,error,debug}` output captured from the host page. Useful when a browser command fails silently. Filterable by `levels` and `since_id`. Ring buffer of last 500 entries; LiveAgent's own calls are excluded. |
-| `clear_browser_logs`    | Clears the browser console log buffer. |
-| `list_lv_routes`        | Lists every Phoenix LiveView route in every router loaded in the running VM — path, LiveView module, `live_action`, `live_session`, and parent router. Filter by router substring or path prefix. Use before `navigate` to find the right path. |
-| `scratchpad_save`       | Saves the current assigns of a LiveView as a named snapshot. Pass a `note` to document why and what comparison is planned — the note is stored with the snapshot and shown on retrieval. Snapshots survive LiveView PID changes (code reloads). |
-| `scratchpad_list`       | Lists all saved scratchpad snapshots with name, note, view, url, saved_at, and assign key summaries. |
-| `scratchpad_get`        | Returns the full assigns map of a named snapshot along with its note. |
-| `scratchpad_compare`    | Diffs a snapshot against live assigns (pass `pid`) or another snapshot (pass `other_snapshot_name`). Returns changed/added/removed keys — the core "before my change vs now" tool. |
-| `scratchpad_delete`     | Removes a named snapshot. |
+| `act_as`                | Logs the browser session in as a chosen user/persona so the driving tools then run **as that actor** — the one-call alternative to the login dance, built for testing org isolation. Returns the reconnected scope. Dev/test only; requires a `:act_as` closure + `:session_options` config and **Drive** ON.                 |
+| `wait_for`              | Blocks until a condition is met. Modes: `{assign: {pid, key, equals?}}` polls a LiveView assign server-side (panel not required); `{selector}` / `{text}` use a browser MutationObserver. Default `timeout_ms` 5000.                                                                                                          |
+| `take_screenshot`       | Captures the browser to a PNG in `/tmp`. Optionally clip to one element by `selector` / `cid` / `text`; the result reports the captured rect. The panel UI is excluded.                                                                                                                                                       |
+| `screenshot_baseline`   | Captures now and saves it as a named baseline under `screenshots/baselines/<name>.png` — the "before" for a visual diff. Honors the same element-clip args.                                                                                                                                                                   |
+| `screenshot_diff`       | Compares the current screen to a named baseline and returns `changed_ratio`, merged `changed_boxes`, `dims_match?`, and an `overlay_path` (baseline with changed pixels tinted red) instead of two full images. AA-aware; tune via `threshold` / `include_aa`.                                                                |
+| `expect_assign`         | Assertion sibling of `get_assign`: returns `{pass, path, expected, actual, waited_ms}` for an assign (dot-path supported) via `equals` or `matches`, instead of dumping state to eyeball. `timeout_ms > 0` polls until it passes (async settle); a failure is `pass: false`, not an error.                                    |
+| `expect_no_errors`      | Assertion gate over the error log — `pass` only if no errors recorded (optionally since a `since_id`). Pattern: `clear_errors` → act → `expect_no_errors`. Returns `{pass, count, errors}`.                                                                                                                                   |
+| `get_errors`            | Returns JS and server errors collected since the server started — uncaught exceptions, unhandled Promise rejections, and LiveView callback exceptions. Each error has a `source` ("js" or "server"), message, stacktrace, and timestamp. Pass `since_id` to fetch only new errors.                                            |
+| `clear_errors`          | Clears the error buffer. Use before reproducing an issue so `expect_no_errors` only sees new errors.                                                                                                                                                                                                                          |
+| `inject_css`            | Injects a CSS rule block directly into the user's browser page without touching source files. Use to prototype style fixes visually, then write the confirmed fix to the actual stylesheet. Pass an `id` to label injections so you can revert by name. Requires the panel open.                                              |
+| `revert_css`            | Removes previously injected CSS. Pass `id` to remove a specific injection or omit to remove all. Requires the panel open.                                                                                                                                                                                                     |
+| `scroll_to`             | Scrolls the browser page to bring an element into view by CSS selector. Useful before `take_screenshot` to capture below-the-fold content. Requires the panel open.                                                                                                                                                           |
+| `get_computed_styles`   | Returns the browser's resolved computed CSS for an element — final values after all stylesheets, inheritance, and cascade. Also returns the element's bounding rect. Pass a `properties` list to fetch only specific CSS properties. Requires the panel open.                                                                 |
+| `get_browser_logs`      | Returns a tail of `console.{log,info,warn,error,debug}` output captured from the host page. Useful when a browser command fails silently. Filterable by `levels` and `since_id`. Ring buffer of last 500 entries; LiveAgent's own calls are excluded.                                                                         |
+| `clear_browser_logs`    | Clears the browser console log buffer.                                                                                                                                                                                                                                                                                        |
+| `list_lv_routes`        | Lists every Phoenix LiveView route in every router loaded in the running VM — path, LiveView module, `live_action`, `live_session`, and parent router. Filter by router substring or path prefix. Use before `navigate` to find the right path.                                                                               |
+| `scratchpad_save`       | Saves the current assigns of a LiveView as a named snapshot. Pass a `note` to document why and what comparison is planned — the note is stored with the snapshot and shown on retrieval. Snapshots survive LiveView PID changes (code reloads).                                                                               |
+| `scratchpad_list`       | Lists all saved scratchpad snapshots with name, note, view, url, saved_at, and assign key summaries.                                                                                                                                                                                                                          |
+| `scratchpad_get`        | Returns the full assigns map of a named snapshot along with its note.                                                                                                                                                                                                                                                         |
+| `scratchpad_compare`    | Diffs a snapshot against live assigns (pass `pid`) or another snapshot (pass `other_snapshot_name`). Returns changed/added/removed keys — the core "before my change vs now" tool.                                                                                                                                            |
+| `scratchpad_delete`     | Removes a named snapshot.                                                                                                                                                                                                                                                                                                     |
 
 **Optional tools** (enabled per plug option — see [Options](#options)):
 
-| Tool                    | Description                                                                     |
-| ----------------------- | ------------------------------------------------------------------------------- |
-| `list_oban_jobs`        | Lists rows from the host app's `oban_jobs` table. Filter by `state`, `queue`, `worker`, or `limit`. Enabled by `oban_tools: true`. |
-| `get_oban_job`          | Fetches full details for one Oban job by id, including its error history. Enabled by `oban_tools: true`. |
-| `retry_oban_job`        | Moves an Oban job back to `available` so it's picked up on the next queue poll. Wraps `Oban.retry_job/1`. Enabled by `oban_tools: true`. |
-| `list_pubsub_topics`    | Lists every Phoenix.PubSub topic that currently has at least one local subscriber, with subscriber counts. Enabled by `pubsub_tools: true` or `pubsub_tools: MyApp.PubSub`. |
-| `tail_pubsub_topic`     | Subscribes to a PubSub topic and returns up to `max_n` messages received within `wait_ms`. Useful for verifying realtime fan-out — call this, trigger an action (e.g. via `click`), and get back the captured broadcast. Enabled by `pubsub_tools: ...`. |
+| Tool                 | Description                                                                                                                                                                                                                                              |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list_oban_jobs`     | Lists rows from the host app's `oban_jobs` table. Filter by `state`, `queue`, `worker`, or `limit`. Enabled by `oban_tools: true`.                                                                                                                       |
+| `get_oban_job`       | Fetches full details for one Oban job by id, including its error history. Enabled by `oban_tools: true`.                                                                                                                                                 |
+| `retry_oban_job`     | Moves an Oban job back to `available` so it's picked up on the next queue poll. Wraps `Oban.retry_job/1`. Enabled by `oban_tools: true`.                                                                                                                 |
+| `list_pubsub_topics` | Lists every Phoenix.PubSub topic that currently has at least one local subscriber, with subscriber counts. Enabled by `pubsub_tools: true` or `pubsub_tools: MyApp.PubSub`.                                                                              |
+| `tail_pubsub_topic`  | Subscribes to a PubSub topic and returns up to `max_n` messages received within `wait_ms`. Useful for verifying realtime fan-out — call this, trigger an action (e.g. via `click`), and get back the captured broadcast. Enabled by `pubsub_tools: ...`. |
 
 ### Agent controls
 
@@ -143,12 +144,12 @@ you can see and stop anything Claude does.
 
 **Status dot** — top-right of the panel bar:
 
-| Color  | Meaning                                                  |
-| ------ | -------------------------------------------------------- |
-| Gray   | Panel closed / agent control idle                        |
-| Green  | Connected and long-polling for the next command          |
-| Yellow | Currently executing a command from Claude               |
-| Red    | Connection error — retrying every 2s                     |
+| Color  | Meaning                                         |
+| ------ | ----------------------------------------------- |
+| Gray   | Panel closed / agent control idle               |
+| Green  | Connected and long-polling for the next command |
+| Yellow | Currently executing a command from Claude       |
+| Red    | Connection error — retrying every 2s            |
 
 **Drive toggle** — next to the status dot. `highlight_element` works regardless
 (read-only), but `click`, `navigate`, `fill`, and `submit` refuse to run unless
@@ -216,8 +217,7 @@ use is testing multi-tenant **org isolation**.
 
 Claude calls `act_as("orgb-admin@example.com")` (the page reloads and reconnects
 authenticated; the tool returns the new actor/tenant scope so it confirms who it
-became), then `navigate`s to org A's record and reads the expected forbidden /
-404. `act_as("orga-admin@example.com")` → same URL → the record renders.
+became), then `navigate`s to org A's record and reads the expected forbidden / 404. `act_as("orga-admin@example.com")` → same URL → the record renders.
 
 **This is privileged and dev-only.** Four independent locks, none present in a
 prod build:
@@ -269,7 +269,7 @@ Notes:
 - Resolve the user with `authorize?: false` — there's no actor yet (that's the
   point), so a normal scoped read would refuse. Same posture as a seed script.
 - **Don't thread the tenant through the closure.** The closure mints the
-  *actor*; your app's own `on_mount`/scope-resolution derives the *tenant* when
+  _actor_; your app's own `on_mount`/scope-resolution derives the _tenant_ when
   the socket reconnects. That's why org isolation needs no extra wiring.
 - A closure that raises (e.g. user not found) returns a clean error — never a
   half-authenticated state.
@@ -283,7 +283,7 @@ Add to your Phoenix app's deps in `mix.exs`:
 ```elixir
 defp deps do
   [
-    {:live_agent, "~> 0.1", only: :dev}
+    {:live_agent, "~> 0.2", only: :dev}
   ]
 end
 ```
@@ -481,7 +481,7 @@ The tree is parsed from the last HTML response LiveAgent intercepted. Navigate t
 ### Via visual regression (screenshot diffs)
 
 The design-system loop — screenshot, eyeball, tweak CSS, screenshot again — gets
-a real *comparison* primitive instead of asking Claude to diff two full-page PNGs
+a real _comparison_ primitive instead of asking Claude to diff two full-page PNGs
 by eye:
 
 1. **Mark a baseline.** _"Snapshot the cart card as `cart`."_ → Claude calls
@@ -507,7 +507,7 @@ by eye:
 
 **Element clipping** — pass `selector` / `cid` / `text` to `take_screenshot`,
 `screenshot_baseline`, and `screenshot_diff` to capture just one component, so the
-relevant 400×200 region isn't buried in a 1440×3000 full-page shot. Use the *same*
+relevant 400×200 region isn't buried in a 1440×3000 full-page shot. Use the _same_
 clip for the baseline and the diff so their dimensions line up — if the page
 reflowed and the sizes differ, `screenshot_diff` returns `dims_match?: false` with
 both sizes rather than a bogus ratio.
@@ -536,7 +536,7 @@ Claude calls `list_live_views` to find the right process, then `get_assigns` to 
 ### Via the scope inspector
 
 In a multi-tenant Ash app, the most error-prone part of evaluating a query by
-hand is reconstructing *who the user is* — their actor, tenant, and scope —
+hand is reconstructing _who the user is_ — their actor, tenant, and scope —
 so the call returns what they actually see. `get_scope` hands Claude that
 context straight from the live socket:
 
@@ -560,7 +560,7 @@ explicit verdict — tighter verify loops, and a real assertion for the `verify`
 skill to hang on:
 
 - _"Confirm the alert flipped to red."_ → `expect_assign(pid, key: "alert.level",
-  equals: "emergency")` returns `{ "pass": true, ... }`, or
+equals: "emergency")` returns `{ "pass": true, ... }`, or
   `{ "pass": false, "actual": "yellow", "expected": { "equals": "emergency" } }` —
   no 350k-char dump to scan. `key` is a dot-path, so nested maps/structs work.
 - _"Wait for the async load to finish, then check it."_ → add `timeout_ms: 3000`
@@ -616,7 +616,7 @@ For "what's loading right now" and "what async work just finished":
 ### Via the scratchpad (before/after snapshots)
 
 The state timeline answers "what just changed"; the scratchpad answers "is the
-state different from how it was *before* I touched the code." It captures a
+state different from how it was _before_ I touched the code." It captures a
 named snapshot of a LiveView's assigns that **survives code reloads** — because
 snapshots are keyed by name, not PID, the "before" you saved is still there
 after Phoenix restarts the process.
@@ -628,7 +628,7 @@ after Phoenix restarts the process.
 2. **Make the change.** Edit the LiveView / component (which reloads the process).
 3. **Diff it.** _"Did anything other than `cart.total` change?"_ →
    `scratchpad_compare(snapshot_name: "before_refactor", pid: "<new pid>")`
-   returns `changed` / `added` / `removed` keys against the *live* assigns.
+   returns `changed` / `added` / `removed` keys against the _live_ assigns.
 
 You can also diff two saved snapshots (`scratchpad_compare(snapshot_name: "a",
 other_snapshot_name: "b")`) to compare two captured points in time.
@@ -643,14 +643,14 @@ overwrites it.
 
 `plug LiveAgent` accepts the following options:
 
-| Option                | Default | Description                                                     |
-| --------------------- | ------- | --------------------------------------------------------------- |
-| `allow_remote_access` | `false` | Allow connections from non-localhost IPs. Leave `false` in dev. |
-| `drive_default`       | `false` | Default for the **Drive** toggle on first visit (no localStorage entry yet). Once the user flips the toggle, their stored preference wins. |
-| `open_default`        | `false` | If `true`, the panel auto-opens on page load instead of starting collapsed behind the floating **⚡ LA** button. Persisted per browser — once the user closes the panel, that choice is remembered. |
+| Option                | Default | Description                                                                                                                                                                                                              |
+| --------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `allow_remote_access` | `false` | Allow connections from non-localhost IPs. Leave `false` in dev.                                                                                                                                                          |
+| `drive_default`       | `false` | Default for the **Drive** toggle on first visit (no localStorage entry yet). Once the user flips the toggle, their stored preference wins.                                                                               |
+| `open_default`        | `false` | If `true`, the panel auto-opens on page load instead of starting collapsed behind the floating **⚡ LA** button. Persisted per browser — once the user closes the panel, that choice is remembered.                      |
 | `scope_assign_keys`   | `[]`    | Extra assign keys (atoms) that `get_scope` should treat as the security scope, tried before the built-in heuristics. Use when your app stores scope under a custom key, e.g. `scope_assign_keys: [:current_membership]`. |
-| `oban_tools`          | `false` | Set to `true` to enable the Oban MCP tools (`list_oban_jobs`, `get_oban_job`, `retry_oban_job`). Requires Oban to be installed and running. |
-| `pubsub_tools`        | `false` | Set to `true` to auto-discover the host app's PubSub, or pass the PubSub module directly (e.g. `pubsub_tools: MyApp.PubSub`). Enables `list_pubsub_topics` and `tail_pubsub_topic`. |
+| `oban_tools`          | `false` | Set to `true` to enable the Oban MCP tools (`list_oban_jobs`, `get_oban_job`, `retry_oban_job`). Requires Oban to be installed and running.                                                                              |
+| `pubsub_tools`        | `false` | Set to `true` to auto-discover the host app's PubSub, or pass the PubSub module directly (e.g. `pubsub_tools: MyApp.PubSub`). Enables `list_pubsub_topics` and `tail_pubsub_topic`.                                      |
 
 ```elixir
 plug LiveAgent, allow_remote_access: false, drive_default: true, open_default: true
