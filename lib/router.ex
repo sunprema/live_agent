@@ -451,7 +451,13 @@ defmodule LiveAgent.Router do
   get "/api/commands" do
     conn = fetch_query_params(conn)
     LiveAgent.PanelStatus.report(conn.query_params)
-    commands = LiveAgent.CommandQueue.poll()
+
+    commands =
+      LiveAgent.CommandQueue.poll(
+        panel_id(conn.query_params),
+        drive?(conn.query_params),
+        panel_url(conn.query_params)
+      )
 
     conn
     |> put_resp_header("content-type", "application/json")
@@ -467,6 +473,12 @@ defmodule LiveAgent.Router do
     opts = Plug.Parsers.init(parsers: [:json], pass: [], json_decoder: Jason)
     conn = Plug.Parsers.call(conn, opts)
     LiveAgent.PanelStatus.report(conn.body_params)
+
+    LiveAgent.CommandQueue.note_panel(
+      panel_id(conn.body_params),
+      drive?(conn.body_params),
+      panel_url(conn.body_params)
+    )
 
     conn
     |> put_resp_header("content-type", "application/json")
@@ -636,6 +648,21 @@ defmodule LiveAgent.Router do
   end
 
   defp fetch_command_id(_), do: {:error, :missing_id}
+
+  # Per-tab identity for command routing: the panel's per-page-load `gen`.
+  # Falls back to "unknown" for older/partial payloads so the queue still
+  # gets a stable binary key.
+  defp panel_id(%{"gen" => gen}) when is_binary(gen) and gen != "", do: gen
+  defp panel_id(_), do: "unknown"
+
+  # Whether this tab's Drive toggle is ON, from the readiness payload.
+  defp drive?(%{"drive" => v}), do: v in [true, 1, "1", "true", "yes"]
+  defp drive?(_), do: false
+
+  # The tab's current path+query, for surfacing the Drive target in
+  # list_live_views. Nil when absent.
+  defp panel_url(%{"url" => url}) when is_binary(url) and url != "", do: url
+  defp panel_url(_), do: nil
 
   defp parse_int(value, default) when is_binary(value) do
     case Integer.parse(value) do

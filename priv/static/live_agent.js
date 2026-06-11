@@ -567,6 +567,9 @@
       lv: lvConnected ? "1" : "0",
       main: document.querySelector("[data-phx-main]") ? "1" : "0",
       url: location.pathname + location.search,
+      // Whether this tab is the agent's drive target. With multiple tabs open,
+      // the server routes browser commands to the tab reporting drive=1.
+      drive: state.driveEnabled ? "1" : "0",
     };
   }
 
@@ -1962,6 +1965,10 @@
         try {
           localStorage.setItem("la-drive-enabled", driveCb.checked ? "1" : "0");
         } catch (_) {}
+        // Tell the server immediately which tab is the drive target, instead
+        // of waiting for the current long-poll (up to 25s) to cycle. The hello
+        // beacon carries the updated `drive` flag for this panel_id.
+        postHello();
       });
     }
 

@@ -67,7 +67,7 @@ Claude Code can call these tools while you work:
 
 | Tool                    | Description                                                                                                                                                                                                                                                                                                                   |
 | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `list_live_views`       | Lists all active LiveView processes (PID, view module, assign keys). Marks the **connected root** — the live view on screen — and sorts it first, so follow-up tools (incl. after an `act_as` reload) target the right PID.                                                                                                   |
+| `list_live_views`       | Lists all active LiveView processes (PID, view module, assign keys). Marks the **connected root** — the live view on screen — and sorts it first, so follow-up tools (incl. after an `act_as` reload) target the right PID. With multiple tabs open, also marks the **Drive target** (the tab whose URL matches the one with Drive ON) and names its URL in the header, so you can see which tab the browser-driving tools will act on. |
 | `get_assigns`           | Returns the full assigns map for a LiveView — the live data on screen                                                                                                                                                                                                                                                         |
 | `get_assign`            | Returns a single assign value by key                                                                                                                                                                                                                                                                                          |
 | `get_socket_info`       | Returns full socket metadata (view, IDs, transport, assigns)                                                                                                                                                                                                                                                                  |
@@ -157,6 +157,20 @@ Drive is ON. The toggle's state is remembered per browser (localStorage), so
 turning it off is a hard stop you can leave in place. The initial default for
 new browsers can be set with the `drive_default: true` plug option (see
 [Options](#options)) — localStorage still wins once you flip the toggle.
+
+**Drive also selects the target tab.** When you have the app open in several
+tabs or browsers, each runs its own command poll — so the server needs to know
+which one Claude should act on. The **tab with Drive ON is that target**: the
+server routes every browser-bound command (clicks, screenshots, highlights,
+navigation, …) to it, instead of whichever tab happens to poll first. Flip Drive
+on in the tab you want Claude driving; flipping it on elsewhere immediately moves
+the target there (the panel beacons the change so you don't wait for the current
+long-poll to cycle). If **no** tab has Drive on, commands fall back to any
+connected tab — fine for a single tab, ambiguous with several, so keep Drive on
+in exactly one tab when multiple are open. `list_live_views` marks the matching
+LiveView "← Drive target" (and names the target URL in its header), so Claude can
+confirm which tab it's about to act on — and, for inspection tools that take an
+explicit `pid`, pick the LiveView you mean.
 
 #### Panel readiness
 

@@ -17,6 +17,11 @@ defmodule LiveAgent.MCP.Tools do
         Lists all active Phoenix LiveView processes currently running in the application.
         Returns the PID, view module, socket ID, URL, connection status, and available assign keys.
         Always call this first to discover which LiveView you want to inspect.
+
+        With multiple browser tabs open, the entry whose URL matches the tab with
+        the "Drive" toggle ON is marked "← Drive target" — that's the tab the
+        browser-driving tools (click/fill/navigate/screenshot/...) will act on.
+        The header also states the Drive target URL (or that no tab has Drive on).
         """,
         inputSchema: %{type: "object", properties: %{}, required: []},
         callback: &list_live_views/1
@@ -1233,6 +1238,12 @@ defmodule LiveAgent.MCP.Tools do
       {:ok,
        "No LiveView processes found. Make sure your Phoenix app is running and has active LiveView connections."}
     else
+      drive_url =
+        case LiveAgent.CommandQueue.active_drive_target() do
+          %{url: url} -> url
+          _ -> nil
+        end
+
       text =
         views
         # Connected root first — that's the one to drive / inspect.
@@ -1246,10 +1257,17 @@ defmodule LiveAgent.MCP.Tools do
               do: " (+#{length(view.assign_keys) - 10} more)",
               else: ""
 
-          root_tag = if view[:root] && view.connected, do: "  ← connected root", else: ""
+          tags =
+            [
+              if(view[:root] && view.connected, do: "connected root"),
+              if(drive_url && drive_tab?(view, drive_url), do: "Drive target")
+            ]
+            |> Enum.reject(&is_nil/1)
+
+          tag_str = if tags == [], do: "", else: "  ← #{Enum.join(tags, ", ")}"
 
           """
-          #{i}. #{view.view}#{root_tag}
+          #{i}. #{view.view}#{tag_str}
              PID:       #{view.pid_string}
              Socket ID: #{view.id || "(none)"}
              URL:       #{view.url || "(none)"}
@@ -1263,9 +1281,44 @@ defmodule LiveAgent.MCP.Tools do
       hint =
         "\nThe connected root (marked ←) is the live view on screen — pass its PID to " <>
           "get_assigns / get_scope / expect_assign. After an act_as reload, prior roots " <>
-          "may briefly linger; the connected root is the current one.\n"
+          "may briefly linger; the connected root is the current one.\n" <>
+          drive_target_hint(drive_url, views)
 
       {:ok, "Found #{length(views)} LiveView process(es):\n#{hint}\n#{text}"}
+    end
+  end
+
+  # The Drive target is the tab the browser-driving tools (click/fill/navigate/
+  # screenshot/...) will act on. The panel reports its path+query; the socket
+  # carries a full URL — compare on path+query.
+  defp drive_tab?(view, drive_url) do
+    case view.url do
+      full when is_binary(full) -> path_and_query(full) == drive_url
+      _ -> false
+    end
+  end
+
+  defp path_and_query(url) do
+    uri = URI.parse(url)
+
+    case uri.query do
+      nil -> uri.path || "/"
+      q -> "#{uri.path || "/"}?#{q}"
+    end
+  end
+
+  defp drive_target_hint(nil, _views) do
+    "No tab has Drive ON — browser-driving tools will fall back to any " <>
+      "connected tab. Turn Drive on in the tab you want driven.\n"
+  end
+
+  defp drive_target_hint(drive_url, views) do
+    if Enum.any?(views, fn v -> drive_tab?(v, drive_url) end) do
+      "The Drive target (also marked ←) is the tab browser-driving tools " <>
+        "(click/fill/navigate/screenshot) will act on: #{drive_url}\n"
+    else
+      "Drive is ON for a tab at #{drive_url}, but no listed LiveView matches " <>
+        "that path (it may be a non-LV page or still loading).\n"
     end
   end
 
