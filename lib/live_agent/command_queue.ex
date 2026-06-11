@@ -4,17 +4,35 @@ defmodule LiveAgent.CommandQueue do
   # block until they see the result) with the panel JS (which long-polls
   # for commands and POSTs results back).
   #
-  # Two parking pools, both held inside the GenServer:
+  # Multi-tab routing
+  # ─────────────────
+  # When several browser tabs are open, each runs its own command long-poll.
+  # We must deliver a command to the tab the user actually wants driven, not
+  # whichever happens to poll first. The "Drive" toggle in the panel is that
+  # selector: the tab with Drive ON is the agent's target.
   #
-  #   - mcp_waiters: id => from         (MCP tool call awaiting its result)
-  #   - browser_waiters: [from]          (panel long-polls awaiting work)
+  # Every poll (and the /api/hello beacon fired when Drive is toggled) carries
+  # the panel's `panel_id` (the per-page-load `gen`) and its `drive` flag, so
+  # the server keeps a small registry:
   #
-  # When the MCP side enqueues a command, if a panel is parked we hand the
-  # command straight to it; otherwise the command waits in `pending`.
+  #   panels: panel_id => %{drive: bool, last_seen: ts, waiter: {from, ref} | nil}
+  #
+  #   - mcp_waiters: id => from   (MCP tool call awaiting its result)
+  #   - waiter (per panel)        (that tab's parked long-poll awaiting work)
+  #
+  # On enqueue we deliver to the *target* panel (the freshest Drive-on tab). If
+  # no tab has Drive on we fall back to any parked tab, preserving single-tab
+  # behaviour where the user never flips Drive (read-only ops still work; the
+  # mutating ops are gated browser-side as before).
 
   use GenServer
 
   @poll_timeout_ms 25_000
+
+  # A panel is considered gone if we haven't heard from it for this long and it
+  # has no parked poll. Kept just above @poll_timeout_ms so a healthy panel
+  # mid-park is never treated as stale.
+  @panel_stale_ms 30_000
 
   # ── Public API ────────────────────────────────────────────────────────────
 
@@ -65,11 +83,38 @@ defmodule LiveAgent.CommandQueue do
   end
 
   @doc """
-  Long-poll for pending commands. Returns immediately with all pending if any,
+  Long-poll for pending commands on behalf of one panel tab.
+
+  `panel_id` is the panel's per-page-load id (the `gen` it reports), `drive`
+  is whether that tab's Drive toggle is currently ON, and `url` is the tab's
+  current path (used to surface the Drive target in `list_live_views`).
+  Returns immediately with pending commands targeted at this tab if any,
   otherwise parks for up to `timeout_ms`, then returns `[]`.
   """
-  def poll(timeout_ms \\ @poll_timeout_ms) do
-    GenServer.call(__MODULE__, {:poll, timeout_ms}, timeout_ms + 2_000)
+  def poll(panel_id, drive, url \\ nil, timeout_ms \\ @poll_timeout_ms)
+      when is_binary(panel_id) and is_boolean(drive) and (is_binary(url) or is_nil(url)) do
+    GenServer.call(__MODULE__, {:poll, panel_id, drive, url, timeout_ms}, timeout_ms + 2_000)
+  end
+
+  @doc """
+  Out-of-band drive-state update for a panel — fired by the panel's
+  `/api/hello` beacon when the user toggles Drive, so the target switches
+  without waiting for the current long-poll to cycle. If this makes the
+  panel the new target and a command is already pending, it's flushed to
+  the panel's parked poll immediately.
+  """
+  def note_panel(panel_id, drive, url \\ nil)
+      when is_binary(panel_id) and is_boolean(drive) and (is_binary(url) or is_nil(url)) do
+    GenServer.cast(__MODULE__, {:note_panel, panel_id, drive, url})
+  end
+
+  @doc """
+  The current Drive target tab — the freshest still-alive panel with Drive
+  ON — as `%{panel_id: id, url: url}`, or `nil` when no tab has Drive on.
+  Used by `list_live_views` to point the agent at the tab it will drive.
+  """
+  def active_drive_target do
+    GenServer.call(__MODULE__, :active_drive_target)
   end
 
   @doc """
@@ -81,7 +126,7 @@ defmodule LiveAgent.CommandQueue do
   end
 
   @doc """
-  Whether a panel long-poll is currently parked, awaiting a command.
+  Whether any panel long-poll is currently parked, awaiting a command.
 
   A parked waiter is positive proof a panel is alive (it just opened the
   HTTP request), so `LiveAgent.PanelStatus` uses this to bridge the
@@ -101,7 +146,7 @@ defmodule LiveAgent.CommandQueue do
        next_id: 1,
        pending: [],
        mcp_waiters: %{},
-       browser_waiters: []
+       panels: %{}
      }}
   end
 
@@ -114,33 +159,49 @@ defmodule LiveAgent.CommandQueue do
 
     Process.send_after(self(), {:mcp_timeout, id}, timeout_ms)
 
-    state =
-      case state.browser_waiters do
-        [{waiter_from, _ref} | rest] ->
-          GenServer.reply(waiter_from, [cmd])
-          %{state | browser_waiters: rest}
-
-        [] ->
-          %{state | pending: state.pending ++ [cmd]}
-      end
-
-    {:noreply, state}
+    {:noreply, dispatch_or_pend(state, cmd)}
   end
 
-  def handle_call({:poll, timeout_ms}, from, state) do
-    case state.pending do
-      [] ->
-        ref = make_ref()
-        Process.send_after(self(), {:poll_timeout, from, ref}, timeout_ms)
-        {:noreply, %{state | browser_waiters: state.browser_waiters ++ [{from, ref}]}}
+  def handle_call({:poll, panel_id, drive, url, timeout_ms}, from, state) do
+    now = now_ms()
 
-      pending ->
-        {:reply, pending, %{state | pending: []}}
+    panel =
+      state.panels
+      |> Map.get(panel_id, new_panel(drive, now, url))
+      |> merge_report(drive, now, url)
+
+    # A fresh poll supersedes any previous parked poll for this same tab
+    # (e.g. one left dangling by an aborted request); the old `from` is dead,
+    # so dropping it is safe.
+    state = put_in(state.panels[panel_id], %{panel | waiter: nil})
+
+    cond do
+      state.pending != [] and panel_eligible_for_pending?(state, panel_id) ->
+        # All pending commands go to this eligible poller.
+        {:reply, state.pending, %{state | pending: []}}
+
+      true ->
+        ref = make_ref()
+        Process.send_after(self(), {:poll_timeout, panel_id, ref}, timeout_ms)
+        {:noreply, put_in(state.panels[panel_id].waiter, {from, ref})}
     end
   end
 
   def handle_call(:has_parked_waiter?, _from, state) do
-    {:reply, state.browser_waiters != [], state}
+    {:reply, Enum.any?(state.panels, fn {_id, p} -> p.waiter != nil end), state}
+  end
+
+  def handle_call(:active_drive_target, _from, state) do
+    now = now_ms()
+    alive = Enum.filter(state.panels, fn {_id, p} -> alive?(p, now) end)
+
+    reply =
+      case target_entry(alive) do
+        {panel_id, p} -> %{panel_id: panel_id, url: p.url}
+        nil -> nil
+      end
+
+    {:reply, reply, state}
   end
 
   def handle_call({:result, id, result}, _from, state) do
@@ -152,6 +213,32 @@ defmodule LiveAgent.CommandQueue do
         GenServer.reply(mcp_from, {:ok, result})
         {:reply, :ok, %{state | mcp_waiters: rest}}
     end
+  end
+
+  @impl true
+  def handle_cast({:note_panel, panel_id, drive, url}, state) do
+    now = now_ms()
+
+    panel =
+      state.panels
+      |> Map.get(panel_id, new_panel(drive, now, url))
+      |> merge_report(drive, now, url)
+
+    state = put_in(state.panels[panel_id], panel)
+
+    # Toggling Drive ON may make this the target for a command that's been
+    # waiting in `pending` — flush it to this tab's parked poll if it has one.
+    state =
+      if state.pending != [] do
+        case flush_pending_to_target(state) do
+          {:ok, new_state} -> new_state
+          :noop -> state
+        end
+      else
+        state
+      end
+
+    {:noreply, state}
   end
 
   @impl true
@@ -167,15 +254,127 @@ defmodule LiveAgent.CommandQueue do
     end
   end
 
-  def handle_info({:poll_timeout, from, ref}, state) do
-    case Enum.split_with(state.browser_waiters, fn {f, r} -> f == from and r == ref end) do
-      {[_match], rest} ->
+  def handle_info({:poll_timeout, panel_id, ref}, state) do
+    case get_in(state.panels, [panel_id, :waiter]) do
+      {from, ^ref} ->
         GenServer.reply(from, [])
-        {:noreply, %{state | browser_waiters: rest}}
+        {:noreply, put_in(state.panels[panel_id].waiter, nil)}
 
       _ ->
         {:noreply, state}
     end
   end
 
+  # ── Routing helpers ───────────────────────────────────────────────────────
+
+  # Deliver `cmd` to the target panel's parked poll, or hold it in `pending`
+  # until the target (or any panel, in the no-target fallback) next polls.
+  defp dispatch_or_pend(state, cmd) do
+    case target_waiter(state) do
+      {panel_id, {from, _ref}} ->
+        GenServer.reply(from, [cmd])
+        put_in(state.panels[panel_id].waiter, nil)
+
+      nil ->
+        %{state | pending: state.pending ++ [cmd]}
+    end
+  end
+
+  # The parked poll we should hand the next command to:
+  #   1. the freshest Drive-on tab that's currently parked, else
+  #   2. (no Drive-on tab at all) any parked tab — single-tab / never-toggled
+  #      fallback so read-only ops keep working.
+  defp target_waiter(state) do
+    now = now_ms()
+    alive = Enum.filter(state.panels, fn {_id, p} -> alive?(p, now) end)
+
+    drive_on_parked =
+      alive
+      |> Enum.filter(fn {_id, p} -> p.drive and p.waiter != nil end)
+      |> Enum.sort_by(fn {_id, p} -> p.last_seen end, :desc)
+
+    case drive_on_parked do
+      [{panel_id, p} | _] ->
+        {panel_id, p.waiter}
+
+      [] ->
+        if any_drive_on?(alive) do
+          # A Drive-on tab exists but isn't parked right now (mid-execution).
+          # Hold the command for it rather than leaking to a non-selected tab.
+          nil
+        else
+          alive
+          |> Enum.find(fn {_id, p} -> p.waiter != nil end)
+          |> case do
+            {panel_id, p} -> {panel_id, p.waiter}
+            nil -> nil
+          end
+        end
+    end
+  end
+
+  # Used by note_panel: when Drive flips on, push the head of `pending` to the
+  # (now) target tab if it has a parked poll.
+  defp flush_pending_to_target(%{pending: [cmd | rest]} = state) do
+    case target_waiter(state) do
+      {panel_id, {from, _ref}} ->
+        GenServer.reply(from, [cmd])
+
+        {:ok,
+         state
+         |> put_in([:panels, panel_id, :waiter], nil)
+         |> Map.put(:pending, rest)}
+
+      nil ->
+        :noop
+    end
+  end
+
+  defp flush_pending_to_target(_state), do: :noop
+
+  # On poll, may this tab take the pending backlog? Yes if it's the target
+  # (the freshest Drive-on tab), or if no tab has Drive on at all.
+  defp panel_eligible_for_pending?(state, panel_id) do
+    now = now_ms()
+    alive = Enum.filter(state.panels, fn {_id, p} -> alive?(p, now) end)
+
+    case target_panel_id(alive) do
+      nil -> true
+      ^panel_id -> true
+      _ -> false
+    end
+  end
+
+  # The freshest Drive-on panel id among `alive`, or nil if none has Drive on.
+  defp target_panel_id(alive) do
+    case target_entry(alive) do
+      {panel_id, _p} -> panel_id
+      nil -> nil
+    end
+  end
+
+  # The freshest Drive-on `{panel_id, panel}` among `alive`, or nil.
+  defp target_entry(alive) do
+    alive
+    |> Enum.filter(fn {_id, p} -> p.drive end)
+    |> Enum.sort_by(fn {_id, p} -> p.last_seen end, :desc)
+    |> List.first()
+  end
+
+  defp any_drive_on?(alive), do: Enum.any?(alive, fn {_id, p} -> p.drive end)
+
+  defp alive?(%{waiter: waiter, last_seen: last_seen}, now) do
+    waiter != nil or now - last_seen < @panel_stale_ms
+  end
+
+  defp new_panel(drive, now, url),
+    do: %{drive: drive, last_seen: now, waiter: nil, url: url}
+
+  # Fold a fresh report into an existing panel entry. A nil url (older payload
+  # or non-poll beacon) leaves the last known url intact.
+  defp merge_report(panel, drive, now, url) do
+    %{panel | drive: drive, last_seen: now, url: url || panel[:url]}
+  end
+
+  defp now_ms, do: System.monotonic_time(:millisecond)
 end
